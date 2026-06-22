@@ -20,3 +20,7 @@ def setup_logging():
     logging.getLogger('chromadb').setLevel(logging.WARNING)
     logging.getLogger('sentence_transformers').setLevel(logging.WARNING)
     logging.getLogger('httpx').setLevel(logging.WARNING)
+
+
+# Shared application logger
+logger = logging.getLogger("pa_agent")

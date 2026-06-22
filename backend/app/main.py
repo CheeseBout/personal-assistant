@@ -7,11 +7,12 @@ setup_logging()
 from .api.upload import router as upload_router
 from .api.chat import router as chat_router
 from .api.debug import router as debug_router
+from .core.config import settings
 
 app = FastAPI(title="Local RAG Agent", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

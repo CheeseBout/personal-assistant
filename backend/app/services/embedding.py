@@ -25,24 +25,37 @@ class EmbeddingService:
         return self.model.encode(text, convert_to_numpy=True).tolist()
 
 class VectorStore:
-    def __init__(self, persist_dir: str = "../data/embeddings"):
+    def __init__(self, persist_dir: str = None):
+        if persist_dir is None:
+            from ..core.config import settings
+            persist_dir = settings.VECTOR_STORE_PATH
         os.makedirs(persist_dir, exist_ok=True)
         self.persist_dir = persist_dir
         self.client = chromadb.PersistentClient(path=persist_dir)
         self.collection = self.client.get_or_create_collection("documents")
         print(f"Vector store initialized at: {persist_dir}")
 
-    def add_documents(self, doc_id: str, chunks: List[Dict], embeddings: List[List[float]]):
+    def add_documents(self, doc_id: str, chunks: List[Dict], embeddings: List[List[float]], version: int = 1):
         """Add document chunks to vector store"""
         if not chunks or not embeddings:
             return
 
-        ids = [f"{doc_id}_{c['index']}" for c in chunks]
+        ids = [f"{doc_id}_v{version}_{c['index']}" for c in chunks]
         texts = [c['content'] for c in chunks]
-        metadatas = [
-            {"doc_id": doc_id, "chunk_index": c['index'], "start": c['start_char'], "end": c['end_char']}
-            for c in chunks
-        ]
+        metadatas = []
+        for c in chunks:
+            md = {
+                "doc_id": doc_id,
+                "version": version,
+                "chunk_index": c['index'],
+                "start": c.get('start_char', 0),
+                "end": c.get('end_char', 0),
+            }
+            # Flatten structural metadata (page / sheet / heading / section)
+            for k, v in (c.get('meta') or {}).items():
+                if v is not None:
+                    md[k] = v
+            metadatas.append(md)
 
         self.collection.add(
             ids=ids,
@@ -50,16 +63,17 @@ class VectorStore:
             documents=texts,
             metadatas=metadatas
         )
-        print(f"Added {len(chunks)} chunks to vector store for doc {doc_id}")
+        print(f"Added {len(chunks)} chunks to vector store for doc {doc_id} v{version}")
 
-    def search(self, query: str, n_results: int = 5) -> List[Dict]:
-        """Search similar chunks"""
+    def search(self, query: str, n_results: int = 5, where: Dict = None) -> List[Dict]:
+        """Search similar chunks, optionally filtered by metadata (e.g. current version)."""
         if self.collection.count() == 0:
             return []
 
         results = self.collection.query(
             query_texts=[query],
-            n_results=min(n_results, self.collection.count())
+            n_results=min(n_results, self.collection.count()),
+            where=where or None,
         )
 
         formatted = []
@@ -72,6 +86,11 @@ class VectorStore:
             })
 
         return formatted
+
+    def count_by_doc_id(self, doc_id: str) -> int:
+        """Return number of stored vectors for a document (used to verify deletion)."""
+        results = self.collection.get(where={"doc_id": doc_id})
+        return len(results['ids']) if results and results.get('ids') else 0
 
     def delete_by_doc_id(self, doc_id: str):
         """Delete all chunks for a document"""
