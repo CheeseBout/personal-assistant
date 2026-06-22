@@ -97,6 +97,67 @@ class DocumentMetadata(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+# Phase 3 — Agent Core tables
+
+class Tool(Base):
+    """Tool registry metadata."""
+    __tablename__ = "tools"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, unique=True, nullable=False)
+    description = Column(Text)
+    input_schema = Column(JSON, default={})
+    risk_level = Column(Integer, default=0)  # 0=low, 1=medium, 2=high, 3=critical
+    requires_approval = Column(Boolean, default=False)
+    rollback_type = Column(String)  # "reversible", "snapshot_required", "compensating_only", "irreversible"
+    rollback_supported = Column(Boolean, default=False)
+    logs_sensitive_args = Column(Boolean, default=False)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ApprovalRequest(Base):
+    """HITL approval requests."""
+    __tablename__ = "approval_requests"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False)
+    tool_name = Column(String, nullable=False)
+    arguments_json = Column(JSON, default={})
+    risk_level = Column(Integer)
+    reason = Column(Text)
+    status = Column(String, default="pending")  # pending, approved, denied, timeout
+    requested_at = Column(DateTime, default=datetime.utcnow)
+    decided_at = Column(DateTime)
+    decided_by = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ShortTermMemory(Base):
+    """Session-scoped key-value store for agent state."""
+    __tablename__ = "short_term_memory"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False, index=True)
+    key = Column(String, nullable=False)
+    value_json = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EpisodicEvent(Base):
+    """Append-only event log for agent actions."""
+    __tablename__ = "episodic_events"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False, index=True)
+    actor = Column(String)  # "agent", "user", "system"
+    action = Column(String)
+    details_json = Column(JSON, default={})
+    metadata_json = Column(JSON, default={})
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 def _migrate_schema():
     """Add columns introduced after the initial schema (lightweight, idempotent).
 
@@ -110,10 +171,23 @@ def _migrate_schema():
     wanted = {
         "documents": [("file_size", "INTEGER")],
         "chunks": [("version", "INTEGER DEFAULT 1")],
+        # Phase 3 tables will be created via create_all, but ensure indexes exist
+        "short_term_memory": [("index", "idx_stm_session")],
+        "episodic_events": [("index", "idx_episodic_session")],
+        "approval_requests": [("index", "idx_approval_session")],
     }
     with engine.begin() as conn:
         for table, columns in wanted.items():
             if table not in existing_tables:
+                continue
+            if columns[0][0] == "index":
+                # Create indexes if they don't exist
+                for _, idx_name in columns:
+                    # Check if index exists (simple heuristic)
+                    try:
+                        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} (session_id)"))
+                    except Exception:
+                        pass
                 continue
             present = {c["name"] for c in inspector.get_columns(table)}
             for name, ddl_type in columns:
@@ -134,3 +208,15 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def get_sync_db():
+    """Generator yielding a sync session. Use: db = next(get_sync_db()).
+
+    Caller is responsible for closing the session.
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        pass  # caller closes

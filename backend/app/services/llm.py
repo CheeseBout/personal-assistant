@@ -1,7 +1,7 @@
 import os
-from typing import List, Dict, Any, Optional
-from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
+from typing import List, Dict, Any
+from openai import AsyncOpenAI, OpenAI
+from pydantic import BaseModel
 import json
 
 class Message(BaseModel):
@@ -18,13 +18,45 @@ class LLMResponse(BaseModel):
 
 class LLMProvider:
     def __init__(self, api_key: str = None, base_url: str = None, model: str = "gpt-4o"):
-        self.client = AsyncOpenAI(
-            api_key=api_key or os.getenv("OPENAI_API_KEY"),
-            base_url=base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        )
+        resolved_key = api_key or os.getenv("OPENAI_API_KEY")
+        resolved_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        self.client = AsyncOpenAI(api_key=resolved_key, base_url=resolved_url)
+        self.sync_client = OpenAI(api_key=resolved_key, base_url=resolved_url)
         self.model = model
 
-    async def chat(
+    def chat(
+        self,
+        messages: List[Dict],
+        tools: List[Dict] = None,
+        temperature: float = 0.7
+    ) -> LLMResponse:
+        """Synchronous LLM call with tools (used by the agent loop)."""
+        formatted_messages = [
+            {"role": m["role"], "content": m["content"]} for m in messages
+        ]
+        try:
+            response = self.sync_client.chat.completions.create(
+                model=self.model,
+                messages=formatted_messages,
+                tools=tools or None,
+                tool_choice="auto" if tools else None,
+                temperature=temperature,
+            )
+            message = response.choices[0].message
+            tool_calls = []
+            if message.tool_calls:
+                for tc in message.tool_calls:
+                    try:
+                        arguments = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                    tool_calls.append(ToolCall(name=tc.function.name, arguments=arguments))
+            return LLMResponse(content=message.content or "", tool_calls=tool_calls)
+        except Exception as e:
+            print(f"LLM sync API error: {e}")
+            raise
+
+    async def chat_async(
         self,
         messages: List[Dict],
         context: str = None,

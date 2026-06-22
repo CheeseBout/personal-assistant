@@ -7,6 +7,7 @@ setup_logging()
 from .api.upload import router as upload_router
 from .api.chat import router as chat_router
 from .api.debug import router as debug_router
+from .api.agent import router as agent_router
 from .core.config import settings
 
 app = FastAPI(title="Local RAG Agent", version="0.1.0")
@@ -23,7 +24,10 @@ app.add_middleware(
 async def startup_event():
     from .models.database import init_db
     init_db()
-    print("Database initialized")
+    # Initialize Phase 3 components
+    from .services.tool_registry import ToolRegistry
+    ToolRegistry.get_instance().initialize()
+    print("Database initialized, ToolRegistry loaded")
 
 
 @app.get("/")
@@ -34,6 +38,7 @@ async def root():
 app.include_router(upload_router)
 app.include_router(chat_router)
 app.include_router(debug_router)
+app.include_router(agent_router)
 
 
 @app.get("/api/health")

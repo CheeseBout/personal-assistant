@@ -6,6 +6,10 @@ import uuid
 from ..models.async_db import get_async_db, Message as MessageModel
 from ..services.llm import LLMProvider
 from ..services.rag import RAGEngine
+from ..services.agent_loop import AgentLoop
+from ..services.permission_engine import PermissionEngine
+from ..services.short_term_memory import ShortTermMemoryManager
+from ..services.episodic_memory import EpisodicMemory
 from ..core.config import settings
 from ..core.logging_config import logger
 
@@ -16,6 +20,7 @@ llm_provider = LLMProvider(
     model=settings.DEFAULT_MODEL
 )
 _rag_engine: Optional[RAGEngine] = None
+_agent_loop: Optional[AgentLoop] = None
 
 
 def get_rag_engine() -> RAGEngine:
@@ -23,6 +28,13 @@ def get_rag_engine() -> RAGEngine:
     if _rag_engine is None:
         _rag_engine = RAGEngine()
     return _rag_engine
+
+
+def get_agent_loop() -> AgentLoop:
+    global _agent_loop
+    if _agent_loop is None:
+        _agent_loop = AgentLoop(llm_provider=llm_provider)
+    return _agent_loop
 
 
 @router.post("")

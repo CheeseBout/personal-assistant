@@ -103,6 +103,24 @@ class RAGEngine:
     async def search_async(self, query: str, n_results: int = 10) -> List[Dict]:
         return self.hybrid_search(query)[:n_results]
 
+    def search_as_tool(self, query: str, n_results: int = 10) -> List[Dict]:
+        """Tool-friendly search: returns simplified results for agent context."""
+        results = self.hybrid_search(query)[:n_results]
+        simplified = []
+        for r in results:
+            meta = r.get('metadata', {})
+            score = r.get('rerank_score', r.get('fusion_score', 0.0))
+            simplified.append({
+                "content": r.get('content', '')[:500],  # Preview only
+                "score": round(score, 3),
+                "filename": meta.get('doc_id', 'unknown'),
+                "page": meta.get('page'),
+                "sheet": meta.get('sheet'),
+                "heading": meta.get('heading'),
+                "chunk_index": meta.get('chunk_index'),
+            })
+        return simplified
+
     def calculate_relevance_score(self, query_embedding: List[float], chunk_embedding: List[float]) -> float:
         q = np.array(query_embedding)
         c = np.array(chunk_embedding)
