@@ -1,20 +1,28 @@
-from fastapi import APIRouter, Depends, HTTPException
+﻿from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import Optional
 import uuid
 
-from ...models.database import get_db, Message
-from ...services.llm import LLMProvider
-from ...services.rag import RAGEngine
-from ...core.config import settings
+from ..models.database import get_db, Message
+from ..services.llm import LLMProvider
+from ..services.rag import RAGEngine
+from ..core.config import settings
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 llm_provider = LLMProvider(
     api_key=settings.OPENAI_API_KEY,
     base_url=settings.OPENAI_BASE_URL,
-    model=settings.MODEL
+    model=settings.DEFAULT_MODEL
 )
-rag_engine = RAGEngine()
+_rag_engine: Optional[RAGEngine] = None
+
+
+def get_rag_engine() -> RAGEngine:
+    global _rag_engine
+    if _rag_engine is None:
+        _rag_engine = RAGEngine()
+    return _rag_engine
+
 
 @router.post("")
 async def chat(request: dict, db: Session = Depends(get_db)):
@@ -25,7 +33,6 @@ async def chat(request: dict, db: Session = Depends(get_db)):
     if not message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    # Save user message
     user_msg = Message(
         id=str(uuid.uuid4()),
         session_id=session_id,
@@ -35,15 +42,14 @@ async def chat(request: dict, db: Session = Depends(get_db)):
     db.add(user_msg)
     db.commit()
 
-    # Retrieve context
     try:
-        retrieval = await rag_engine.retrieve_and_rerank(message)
+        retrieval = await get_rag_engine().retrieve_and_rerank(message, db)
     except Exception as e:
         print(f"RAG error: {e}")
         retrieval = None
 
     if not retrieval:
-        response = "Không tìm thấy tài liệu phù hợp."
+        response = "Khong tim thay tai lieu phu hop."
         citations = []
     else:
         try:
@@ -55,10 +61,9 @@ async def chat(request: dict, db: Session = Depends(get_db)):
             citations = retrieval["sources"]
         except Exception as e:
             print(f"LLM error: {e}")
-            response = "Xin lỗi, đã xảy ra lỗi khi xử lý câu trả lời."
+            response = "Xin loi, da xay ra loi khi xu ly cau tra loi."
             citations = []
 
-    # Save assistant message
     assistant_msg = Message(
         id=str(uuid.uuid4()),
         session_id=session_id,
@@ -74,6 +79,7 @@ async def chat(request: dict, db: Session = Depends(get_db)):
         "session_id": session_id,
         "citations": citations
     }
+
 
 @router.get("/history/{session_id}")
 async def get_chat_history(session_id: str, db: Session = Depends(get_db)):
@@ -91,6 +97,7 @@ async def get_chat_history(session_id: str, db: Session = Depends(get_db)):
         }
         for m in messages
     ]
+
 
 @router.delete("/history/{session_id}")
 async def clear_chat_history(session_id: str, db: Session = Depends(get_db)):

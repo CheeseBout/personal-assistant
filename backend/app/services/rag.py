@@ -1,8 +1,8 @@
-from typing import List, Dict, Any, Optional
+﻿from typing import List, Dict, Any, Optional
 import numpy as np
 from sqlalchemy.orm import Session
 from .embedding import EmbeddingService, VectorStore
-from .document import Chunker
+from .document import DocumentParser, Chunker
 from ..models.database import Document, get_db
 
 class RAGEngine:
@@ -11,10 +11,10 @@ class RAGEngine:
         self.vector_store = VectorStore()
         self.chunker = Chunker()
 
-    async def process_document(self, doc_id: str, file_path: str, filename: str, db: Session) -> Dict:
+    async def process_document(self, doc_id: str, file_path: str, filename: str) -> Dict:
         """Parse, chunk, embed and store document"""
         # Parse
-        text = Chunker.parse_file(file_path)
+        text = DocumentParser.parse_file(file_path)
 
         # Chunk
         chunks = Chunker.chunk_text(text)
@@ -33,7 +33,7 @@ class RAGEngine:
             "total_chars": len(text)
         }
 
-    async def search(self, query: str, n_results: int = 10) -> List[Dict]:
+    def search(self, query: str, n_results: int = 10) -> List[Dict]:
         """Search for relevant chunks"""
         results = self.vector_store.search(query, n_results)
         return results
@@ -52,11 +52,11 @@ class RAGEngine:
         self,
         query: str,
         db: Session,
-        threshold: float = 0.3,
-        min_results: int = 1
+        threshold: float = 0.5,
+        min_results: int = 2
     ) -> Optional[Dict]:
         """Retrieve, filter by threshold, and format context with citations"""
-        results = await self.search(query, n_results=10)
+        results = self.search(query, n_results=10)
 
         if not results:
             return None
@@ -67,18 +67,25 @@ class RAGEngine:
         for doc in docs:
             doc_map[doc.id] = doc.filename
 
-        query_embedding = self.embedding_service.embed_single(query)
+        # For ChromaDB, distance is already a similarity-like score (lower = more similar)
+        # Chroma uses L2 distance by default. We'll use the distance directly with an inverted threshold
         filtered = []
 
         for r in results:
             doc_id = r['metadata']['doc_id']
             filename = doc_map.get(doc_id, doc_id)
 
-            # Calculate similarity score
-            score = self.calculate_relevance_score(query_embedding, r['metadata'].get('embedding', []))
-            if score >= threshold:
+            # Use distance from Chroma (lower is better)
+            # For L2 distance, typical range is 0 to ~2 for cosine-like embeddings
+            distance = r.get('distance', 1.0)  # Default to max distance if not present
+
+            # Convert distance to similarity score (0-1, higher is better)
+            # L2 distance can be > 1, so we use exponential decay
+            similarity = float(np.exp(-distance))
+
+            if similarity >= threshold:
                 r_copy = r.copy()
-                r_copy['score'] = score
+                r_copy['score'] = similarity
                 r_copy['filename'] = filename
                 filtered.append(r_copy)
 
@@ -86,11 +93,11 @@ class RAGEngine:
         if len(filtered) < min_results:
             return None
 
-        # Sort by score
+        # Sort by score (descending)
         filtered.sort(key=lambda x: x['score'], reverse=True)
 
-        # Take top 3 results
-        top_results = filtered[:3]
+        # Take top results (max 5 as per config)
+        top_results = filtered[:5]
 
         # Format context for LLM
         context_parts = []
@@ -110,3 +117,4 @@ class RAGEngine:
                 for r in top_results
             ]
         }
+

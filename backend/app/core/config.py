@@ -1,11 +1,12 @@
-from pydantic_settings import BaseSettings
-from typing import Optional
+﻿from pydantic_settings import BaseSettings
+
 
 class Settings(BaseSettings):
     # OpenAI/LLM Configuration
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     DEFAULT_MODEL: str = "gpt-4o"
+    MODEL: str = "gpt-4o"
 
     # Embedding Configuration
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
@@ -33,5 +34,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
+
 
 settings = Settings()

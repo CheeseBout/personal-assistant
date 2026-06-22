@@ -1,16 +1,24 @@
-from fastapi import APIRouter, UploadFile, File, Depends
+﻿from fastapi import APIRouter, UploadFile, File, Depends
 from sqlalchemy.orm import Session
 import uuid
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
-from ...models.database import get_db, Document, Chunk, AuditLog, DocumentMetadata
-from ...services.document import DocumentParser, Chunker
-from ...services.rag import RAGEngine
-from ...core.config import settings
+from ..models.database import get_db, Document, Chunk, AuditLog, DocumentMetadata
+from ..services.document import DocumentParser, Chunker
+from ..services.rag import RAGEngine
+from ..core.config import settings
 
 router = APIRouter(prefix="/api", tags=["documents"])
-rag_engine = RAGEngine()
+_rag_engine: Optional[RAGEngine] = None
+
+
+def get_rag_engine() -> RAGEngine:
+    global _rag_engine
+    if _rag_engine is None:
+        _rag_engine = RAGEngine()
+    return _rag_engine
+
 
 @router.post("/upload")
 async def upload_file(
@@ -20,7 +28,6 @@ async def upload_file(
     """Upload and process document"""
     doc_id = str(uuid.uuid4())
 
-    # Validate file type
     allowed_extensions = ['.txt', '.pdf', '.md', '.docx', '.xlsx']
     file_ext = Path(file.filename).suffix.lower()
     if file_ext not in allowed_extensions:
@@ -29,7 +36,6 @@ async def upload_file(
             "error": f"File type not supported. Allowed: {', '.join(allowed_extensions)}"
         }
 
-    # Save file
     upload_dir = Path(settings.UPLOAD_DIR)
     upload_dir.mkdir(parents=True, exist_ok=True)
     file_path = upload_dir / f"{doc_id}_{file.filename}"
@@ -41,13 +47,11 @@ async def upload_file(
     except Exception as e:
         return {"success": False, "error": f"Failed to save file: {str(e)}"}
 
-    # Calculate hash
     try:
         file_hash = Chunker.calculate_file_hash(str(file_path))
     except Exception as e:
         return {"success": False, "error": f"Failed to calculate hash: {str(e)}"}
 
-    # Create document record
     doc = Document(
         id=doc_id,
         filename=file.filename,
@@ -57,7 +61,6 @@ async def upload_file(
     )
     db.add(doc)
 
-    # Store metadata
     metadata_fields = {
         "file_size": len(content),
         "file_extension": file_ext,
@@ -75,14 +78,10 @@ async def upload_file(
 
     db.commit()
 
-    # Process with RAG
     try:
-        result = await rag_engine.process_document(doc_id, str(file_path), file.filename)
-
-        # Get chunks for DB storage
+        result = await get_rag_engine().process_document(doc_id, str(file_path), file.filename)
         chunks_data = Chunker.chunk_text(DocumentParser.parse_file(str(file_path)))
 
-        # Create chunk records
         for chunk_data in chunks_data:
             chunk = Chunk(
                 id=f"{doc_id}_{chunk_data['index']}",
@@ -98,7 +97,6 @@ async def upload_file(
 
         db.commit()
 
-        # Audit log
         audit = AuditLog(
             action="document_uploaded",
             details={
@@ -120,10 +118,10 @@ async def upload_file(
 
     except Exception as e:
         db.rollback()
-        # Clean up file
         if file_path.exists():
             file_path.unlink()
         return {"success": False, "error": f"RAG processing failed: {str(e)}"}
+
 
 @router.get("/documents")
 async def list_documents(db: Session = Depends(get_db)) -> list:
@@ -139,6 +137,7 @@ async def list_documents(db: Session = Depends(get_db)) -> list:
         for d in docs
     ]
 
+
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
     """Delete document and its embeddings"""
@@ -147,20 +146,12 @@ async def delete_document(doc_id: str, db: Session = Depends(get_db)) -> Dict[st
         return {"success": False, "error": "Document not found"}
 
     try:
-        # Delete from vector store
-        rag_engine.vector_store.delete_by_doc_id(doc_id)
-
-        # Delete chunks
+        get_rag_engine().vector_store.delete_by_doc_id(doc_id)
         db.query(Chunk).filter(Chunk.document_id == doc_id).delete()
-
-        # Delete metadata
         db.query(DocumentMetadata).filter(DocumentMetadata.document_id == doc_id).delete()
-
-        # Soft delete document
         doc.is_active = False
         db.commit()
 
-        # Audit log
         audit = AuditLog(
             action="document_deleted",
             details={"doc_id": doc_id, "filename": doc.filename}
@@ -168,7 +159,6 @@ async def delete_document(doc_id: str, db: Session = Depends(get_db)) -> Dict[st
         db.add(audit)
         db.commit()
 
-        # Delete file
         file_path = Path(doc.file_path)
         if file_path.exists():
             file_path.unlink()
