@@ -6,10 +6,6 @@ import uuid
 from ..models.async_db import get_async_db, Message as MessageModel
 from ..services.llm import LLMProvider
 from ..services.rag import RAGEngine
-from ..services.agent_loop import AgentLoop
-from ..services.permission_engine import PermissionEngine
-from ..services.short_term_memory import ShortTermMemoryManager
-from ..services.episodic_memory import EpisodicMemory
 from ..core.config import settings
 from ..core.logging_config import logger
 
@@ -20,22 +16,12 @@ llm_provider = LLMProvider(
     model=settings.DEFAULT_MODEL
 )
 _rag_engine: Optional[RAGEngine] = None
-_agent_loop: Optional[AgentLoop] = None
-
 
 def get_rag_engine() -> RAGEngine:
     global _rag_engine
     if _rag_engine is None:
         _rag_engine = RAGEngine()
     return _rag_engine
-
-
-def get_agent_loop() -> AgentLoop:
-    global _agent_loop
-    if _agent_loop is None:
-        _agent_loop = AgentLoop(llm_provider=llm_provider)
-    return _agent_loop
-
 
 @router.post("")
 async def chat(
@@ -50,16 +36,14 @@ async def chat(
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     try:
-        # Get conversation history for context (last 10 messages)
         result = await db.execute(
             MessageModel.__table__.select()
             .where(MessageModel.session_id == session_id)
             .order_by(MessageModel.created_at)
-            .limit(20)  # Get up to 20 for context window
+            .limit(20)
         )
         history_messages = result.fetchall()
 
-        # Build conversation context for LLM
         conversation_context = []
         for msg in history_messages:
             conversation_context.append({
@@ -67,7 +51,6 @@ async def chat(
                 "content": msg.content
             })
 
-        # Save user message
         user_msg = MessageModel(
             id=str(uuid.uuid4()),
             session_id=session_id,
@@ -76,7 +59,6 @@ async def chat(
         )
         db.add(user_msg)
 
-        # Get RAG retrieval
         retrieval = None
         try:
             retrieval = await get_rag_engine().retrieve_and_rerank(message, db)
@@ -85,44 +67,38 @@ async def chat(
             retrieval = None
 
         if not retrieval:
-            response = "Không tìm thấy tài liệu phù hợp để trả lời câu hỏi của bạn."
+            response = "Khong tim thay tai lieu phu hop de tra loi cau hoi cua ban."
             citations = []
         else:
             try:
-                # Build messages with RAG context and conversation history
                 llm_messages = []
+                system_prompt = f"""Ban la mot tro ly AI huu ich. Su dung thong tin tu cac tai lieu da cung cap de tra loi cau hoi.
 
-                # Add system prompt with RAG context
-                system_prompt = f"""Bạn là một trợ lý AI hữu ích. Sử dụng thông tin từ các tài liệu đã cung cấp để trả lời câu hỏi.
-
-Ngữ cảnh từ tài liệu:
+Ngu canh tu tai lieu:
 {retrieval['context']}
 
-Hướng dẫn:
-1. Trả lời dựa trên ngữ cảnh được cung cấp.
-2. Nếu ngữ cảnh không chứa thông tin liên quan, hãy nói "Không tìm thấy thông tin phù hợp trong tài liệu."
-3. Luôn trích dẫn nguồn bằng định dạng: [tên file] hoặc [tên file, chunk X]
-4. Không được bịa thông tin ngoài ngữ cảnh.
-5. Trả lời bằng cùng ngôn ngữ với câu hỏi.
-6. Nếu có nhiều nguồn, hãy tổng hợp thông tin từ tất cả các nguồn.
-7. Nếu ngữ cảnh mâu thuẫn, hãy đề cập đến sự mâu thuẫn này."""
+Huong dan:
+1. Tra loi dua tren ngu canh duoc cung cap.
+2. Neu ngu canh khong chua thong tin lien quan, hay noi "Khong tim thay thong tin phu hop trong tai lieu."
+3. Luon trich dan nguon bang dinh dang: [ten file] hoac [ten file, chunk X]
+4. Khong duoc bia thong tin ngoai ngu canh.
+5. Tra loi bang cung ngon ngu voi cau hoi.
+6. Neu co nhieu nguon, hay tong hop thong tin tu tat ca cac nguon.
+7. Neu ngu canh mau thuan, hay de cap den su mau thuan nay."""
 
                 llm_messages.append({"role": "system", "content": system_prompt})
-
-                # Add conversation history (exclude current user message as it's separate)
-                for msg in conversation_context[-10:]:  # Last 10 messages for context
+                for msg in conversation_context[-10:]:
                     if msg["role"] in ["user", "assistant"]:
                         llm_messages.append(msg)
 
-                llm_response = await llm_provider.chat(
+                llm_response = await llm_provider.chat_async(
                     messages=llm_messages,
-                    context=None,  # Already in system prompt
+                    context=None,
                     temperature=0.7
                 )
                 response = llm_response.content
                 citations = retrieval["sources"]
 
-                # Citation coverage + grounding verification (section 10.5)
                 from ..services.grounding import verify_answer
                 verdict = verify_answer(
                     answer=response,
@@ -132,14 +108,13 @@ Hướng dẫn:
                 )
                 if not verdict["accepted"]:
                     logger.info(f"Answer downgraded by verifier: {verdict}")
-                    response = "Không tìm thấy thông tin phù hợp trong tài liệu để trả lời đáng tin cậy."
+                    response = "Khong tim thay thong tin phu hop trong tai lieu de tra loi dang tin cay."
                     citations = []
             except Exception as e:
                 logger.error(f"LLM error: {e}")
-                response = "Xin lỗi, đã xảy ra lỗi khi xử lý câu trả lời. Vui lòng thử lại."
+                response = "Xin loi, da xay ra loi khi xu ly cau tra loi. Vui long thu lai."
                 citations = []
 
-        # Save assistant message
         assistant_msg = MessageModel(
             id=str(uuid.uuid4()),
             session_id=session_id,
@@ -163,7 +138,6 @@ Hướng dẫn:
         logger.error(f"Chat endpoint error: {e}")
         await db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
-
 
 @router.get("/history/{session_id}")
 async def get_chat_history(
@@ -190,7 +164,6 @@ async def get_chat_history(
         }
         for msg in messages
     ]
-
 
 @router.delete("/history/{session_id}")
 async def clear_chat_history(

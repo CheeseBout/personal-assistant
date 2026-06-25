@@ -69,123 +69,13 @@ class AgentLoop:
             # Load short-term memory context
             stm_context = self.stm.get_all(session_id, db)
             if stm_context:
-                stm_summary = "\n".join([f"{k}: {v}" for k, v in stm_context.items()])
-                messages.append({"role": "system", "content": f"Session context:\n{stm_summary}"})
+                # Exclude internal resume state from the prompt context
+                visible = {k: v for k, v in stm_context.items() if k != "pending_agent_state"}
+                if visible:
+                    stm_summary = "\n".join([f"{k}: {v}" for k, v in visible.items()])
+                    messages.append({"role": "system", "content": f"Session context:\n{stm_summary}"})
 
-            tool_calls_made = []
-            iterations = 0
-
-            while iterations < self.max_iterations:
-                iterations += 1
-
-                # Call LLM with tools
-                response = self.llm.chat(
-                    messages=messages,
-                    tools=self._get_tools_schema(),
-                    temperature=0.7
-                )
-
-                # If no tool calls, we have final response
-                if not response.tool_calls:
-                    final_response = response.content or "No response generated."
-                    # Save assistant message
-                    assistant_msg = MessageModel(
-                        id=str(uuid.uuid4()),
-                        session_id=session_id,
-                        role="assistant",
-                        content=final_response,
-                    )
-                    db.add(assistant_msg)
-                    db.commit()
-                    self.episodic.log_event(
-                        session_id=session_id,
-                        actor="agent_loop",
-                        action="response_completed",
-                        details={"iterations": iterations, "tool_calls": len(tool_calls_made)},
-                        db=db
-                    )
-                    return {
-                        "response": final_response,
-                        "status": "completed",
-                        "iterations": iterations,
-                        "tool_calls": tool_calls_made,
-                    }
-
-                # Process tool calls (can be multiple; handle sequentially for now)
-                for tc in response.tool_calls:
-                    tool_name = tc.name
-                    arguments = tc.arguments
-
-                    # Validate arguments
-                    validation_errors = self.registry.validate_arguments(tool_name, arguments)
-                    if validation_errors:
-                        err_msg = {"error": f"Invalid arguments: {', '.join(validation_errors)}"}
-                        messages.append({"role": "assistant", "content": f"Tool call error: {err_msg}"})
-                        continue
-
-                    # Execute tool (may return pending approval)
-                    exec_result = self.executor.execute(tool_name, arguments, session_id, db=db)
-
-                    tool_calls_made.append({
-                        "tool": tool_name,
-                        "arguments": arguments,
-                        "status": exec_result["status"],
-                        "result": exec_result if exec_result["status"] != "pending_approval" else None,
-                    })
-
-                    if exec_result["status"] == "pending_approval":
-                        # HITL: return immediately with approval request
-                        db.commit()
-                        return {
-                            "response": "Cần xác nhận hành động",
-                            "status": "pending_approval",
-                            "approval_id": exec_result["approval_id"],
-                            "iterations": iterations,
-                            "tool_calls": tool_calls_made,
-                        }
-                    elif exec_result["status"] == "denied":
-                        # Permission denied, tell the LLM
-                        messages.append({
-                            "role": "assistant",
-                            "content": f"Action denied: {exec_result.get('reason', 'No reason given')}"
-                        })
-                    elif exec_result["status"] == "error":
-                        messages.append({
-                            "role": "assistant",
-                            "content": f"Tool error: {exec_result.get('error', 'Unknown error')}"
-                        })
-                    else:
-                        # Success, add tool result to conversation
-                        result_str = str(exec_result.get("result", {}))
-                        messages.append({
-                            "role": "assistant",
-                            "content": f"Tool {tool_name} returned: {result_str}"
-                        })
-
-                db.commit()
-
-            # Max iterations reached
-            self.episodic.log_event(
-                session_id=session_id,
-                actor="agent_loop",
-                action="max_iterations_reached",
-                details={"iterations": iterations},
-                db=db
-            )
-            db.add(AuditLog(
-                id=str(uuid.uuid4()),
-                session_id=session_id,
-                actor="agent_loop",
-                action="max_iterations",
-                details={"iterations": iterations}
-            ))
-            db.commit()
-            return {
-                "response": "Đã đạt giới hạn số bước xử lý. Vui lòng thử lại với câu hỏi đơn giản hơn.",
-                "status": "error",
-                "iterations": iterations,
-                "tool_calls": tool_calls_made,
-            }
+            return self._run_loop(session_id, messages, db)
 
         except Exception as e:
             logger.error(f"Agent loop error: {e}")
@@ -212,56 +102,190 @@ class AgentLoop:
                 "tool_calls": [],
             }
 
-    def run_after_approval(self, session_id: str, tool_call: Dict[str, Any],
-                           db: Session, stm=None, episodic=None) -> Dict[str, Any]:
-        """Resume agent loop after user approved a tool call."""
-        if stm is None:
-            stm = self.stm
-        if episodic is None:
-            episodic = self.episodic
+    def _run_loop(self, session_id: str, messages: List[Dict], db: Session,
+                  tool_calls_made: Optional[List[Dict]] = None,
+                  start_iteration: int = 0) -> Dict[str, Any]:
+        """Core agent iteration loop. Shared by run() and run_after_approval().
 
-        # The tool_call dict should contain tool_name, arguments
-        tool_name = tool_call.get("tool")
-        arguments = tool_call.get("arguments", {})
+        Iterates calling the LLM with tools until a final text answer, a pending
+        approval, or max iterations. Persists messages and audit/episodic logs.
+        """
+        tool_calls_made = tool_calls_made if tool_calls_made is not None else []
+        iterations = start_iteration
 
-        # Execute the approved tool
+        while iterations < self.max_iterations:
+            iterations += 1
+
+            # Call LLM with tools
+            response = self.llm.chat(
+                messages=messages,
+                tools=self._get_tools_schema(),
+                temperature=0.7
+            )
+
+            # If no tool calls, we have final response
+            if not response.tool_calls:
+                final_response = response.content or "No response generated."
+                assistant_msg = MessageModel(
+                    id=str(uuid.uuid4()),
+                    session_id=session_id,
+                    role="assistant",
+                    content=final_response,
+                )
+                db.add(assistant_msg)
+                db.commit()
+                self.episodic.log_event(
+                    session_id=session_id,
+                    actor="agent_loop",
+                    action="response_completed",
+                    details={"iterations": iterations, "tool_calls": len(tool_calls_made)},
+                    db=db
+                )
+                return {
+                    "response": final_response,
+                    "status": "completed",
+                    "iterations": iterations,
+                    "tool_calls": tool_calls_made,
+                }
+
+            # Process tool calls (can be multiple; handle sequentially for now)
+            for tc in response.tool_calls:
+                tool_name = tc.name
+                arguments = tc.arguments
+
+                # Validate arguments
+                validation_errors = self.registry.validate_arguments(tool_name, arguments)
+                if validation_errors:
+                    err_msg = {"error": f"Invalid arguments: {', '.join(validation_errors)}"}
+                    messages.append({"role": "assistant", "content": f"Tool call error: {err_msg}"})
+                    continue
+
+                # Execute tool (may return pending approval)
+                exec_result = self.executor.execute(tool_name, arguments, session_id, db=db)
+
+                tool_calls_made.append({
+                    "tool": tool_name,
+                    "arguments": arguments,
+                    "status": exec_result["status"],
+                    "result": exec_result if exec_result["status"] != "pending_approval" else None,
+                })
+
+                if exec_result["status"] == "pending_approval":
+                    # HITL: persist state so we can resume after approval, then return
+                    self.stm.set(session_id, "pending_agent_state", {
+                        "messages": messages,
+                        "tool_calls_made": tool_calls_made,
+                        "iterations": iterations,
+                        "pending_tool": {"tool": tool_name, "arguments": arguments},
+                        "approval_id": exec_result["approval_id"],
+                    }, db=db)
+                    db.commit()
+                    return {
+                        "response": "Cần xác nhận hành động",
+                        "status": "pending_approval",
+                        "approval_id": exec_result["approval_id"],
+                        "iterations": iterations,
+                        "tool_calls": tool_calls_made,
+                    }
+                elif exec_result["status"] == "denied":
+                    messages.append({
+                        "role": "assistant",
+                        "content": f"Action denied: {exec_result.get('reason', 'No reason given')}"
+                    })
+                elif exec_result["status"] == "error":
+                    messages.append({
+                        "role": "assistant",
+                        "content": f"Tool error: {exec_result.get('error', 'Unknown error')}"
+                    })
+                else:
+                    result_str = str(exec_result.get("result", {}))
+                    messages.append({
+                        "role": "assistant",
+                        "content": f"Tool {tool_name} returned: {result_str}"
+                    })
+
+            db.commit()
+
+        # Max iterations reached
+        self.episodic.log_event(
+            session_id=session_id,
+            actor="agent_loop",
+            action="max_iterations_reached",
+            details={"iterations": iterations},
+            db=db
+        )
+        db.add(AuditLog(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            actor="agent_loop",
+            action="max_iterations",
+            details={"iterations": iterations}
+        ))
+        db.commit()
+        return {
+            "response": "Đã đạt giới hạn số bước xử lý. Vui lòng thử lại với câu hỏi đơn giản hơn.",
+            "status": "error",
+            "iterations": iterations,
+            "tool_calls": tool_calls_made,
+        }
+
+    def run_after_approval(self, session_id: str, db: Session,
+                           approved: bool = True) -> Dict[str, Any]:
+        """Resume the agent loop after a user decision on a pending tool call.
+
+        Loads the persisted pending state from short-term memory, executes (or
+        skips, if denied) the approved tool, feeds the result back, and continues
+        the loop to completion or the next approval.
+        """
+        state = self.stm.get(session_id, "pending_agent_state", db=db)
+        if not state:
+            return {
+                "response": "Không tìm thấy hành động đang chờ để tiếp tục.",
+                "status": "error",
+                "tool_calls": [],
+            }
+
+        messages = state.get("messages", [])
+        tool_calls_made = state.get("tool_calls_made", [])
+        iterations = state.get("iterations", 0)
+        pending_tool = state.get("pending_tool", {})
+        tool_name = pending_tool.get("tool")
+        arguments = pending_tool.get("arguments", {})
+
+        # Consume the pending state so it can't be replayed
+        self.stm.delete(session_id, "pending_agent_state", db=db)
+
+        if not approved:
+            # User denied: tell the model and let it continue without the tool
+            messages.append({
+                "role": "assistant",
+                "content": f"User denied action: {tool_name}. Proceed without it."
+            })
+            # Mark the matching pending entry as denied
+            for entry in tool_calls_made:
+                if entry.get("tool") == tool_name and entry.get("status") == "pending_approval":
+                    entry["status"] = "denied"
+            return self._run_loop(session_id, messages, db,
+                                  tool_calls_made=tool_calls_made, start_iteration=iterations)
+
+        # Approved: execute the tool, skipping the permission re-check
         exec_result = self.executor.dispatch_after_approval(tool_name, arguments, session_id, db=db)
 
-        # Continue LLM loop with this result
-        history = self._get_history(session_id, db)
-        messages = self._build_initial_messages(history, history[-1]["content"] if history else "")
-        # Add tool result
-        result_str = str(exec_result.get("result", {}))
+        # Update the pending entry with the real result
+        for entry in tool_calls_made:
+            if entry.get("tool") == tool_name and entry.get("status") == "pending_approval":
+                entry["status"] = exec_result["status"]
+                entry["result"] = exec_result
+                break
+
+        result_str = str(exec_result.get("result", exec_result))
         messages.append({
             "role": "assistant",
             "content": f"Tool {tool_name} returned: {result_str}"
         })
 
-        # Continue iteration
-        try:
-            response = self.llm.chat(messages=messages, tools=self._get_tools_schema(), temperature=0.7)
-        except Exception as e:
-            return {"response": f"LLM error after approval: {str(e)}", "status": "error"}
-
-        if not response.tool_calls:
-            final_response = response.content or "No response."
-            assistant_msg = MessageModel(
-                id=str(uuid.uuid4()),
-                session_id=session_id,
-                role="assistant",
-                content=final_response,
-            )
-            db.add(assistant_msg)
-            db.commit()
-            return {"response": final_response, "status": "completed"}
-
-        # More tool calls: recurse once (could loop but keeping simple)
-        # In a full implementation, this would go back to the main loop
-        return {
-            "response": response.content or "",
-            "status": "completed",
-            "note": "Additional tool calls after approval not implemented in this simplified resume"
-        }
+        return self._run_loop(session_id, messages, db,
+                              tool_calls_made=tool_calls_made, start_iteration=iterations)
 
     def _get_history(self, session_id: str, db: Session, limit: int = 20) -> List[Dict]:
         """Get conversation history for context."""

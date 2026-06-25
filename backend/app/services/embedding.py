@@ -1,31 +1,43 @@
-from sentence_transformers import SentenceTransformer
-import chromadb
-from chromadb.config import Settings
-import os
-from typing import List, Dict, Any
-import numpy as np
-from pathlib import Path
+﻿import os
+from typing import List, Dict
+
 
 class EmbeddingService:
     def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "sentence-transformers is required for document embedding. "
+                "Install backend/requirements.txt before uploading documents."
+            ) from exc
+
         print(f"Loading embedding model: {model_name}...")
         self.model = SentenceTransformer(model_name)
         self.embedding_dim = self.model.get_sentence_embedding_dimension()
         print(f"Model loaded. Embedding dimension: {self.embedding_dim}")
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings for list of texts"""
+        """Generate embeddings for list of texts."""
         if not texts:
             return []
         embeddings = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
         return embeddings.tolist()
 
     def embed_single(self, text: str) -> List[float]:
-        """Generate embedding for single text"""
+        """Generate embedding for single text."""
         return self.model.encode(text, convert_to_numpy=True).tolist()
+
 
 class VectorStore:
     def __init__(self, persist_dir: str = None):
+        try:
+            import chromadb
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "chromadb is required for vector search. Install backend/requirements.txt before uploading documents."
+            ) from exc
+
         if persist_dir is None:
             from ..core.config import settings
             persist_dir = settings.VECTOR_STORE_PATH
@@ -36,7 +48,7 @@ class VectorStore:
         print(f"Vector store initialized at: {persist_dir}")
 
     def add_documents(self, doc_id: str, chunks: List[Dict], embeddings: List[List[float]], version: int = 1):
-        """Add document chunks to vector store"""
+        """Add document chunks to vector store."""
         if not chunks or not embeddings:
             return
 
@@ -51,7 +63,6 @@ class VectorStore:
                 "start": c.get('start_char', 0),
                 "end": c.get('end_char', 0),
             }
-            # Flatten structural metadata (page / sheet / heading / section)
             for k, v in (c.get('meta') or {}).items():
                 if v is not None:
                     md[k] = v
@@ -66,7 +77,7 @@ class VectorStore:
         print(f"Added {len(chunks)} chunks to vector store for doc {doc_id} v{version}")
 
     def search(self, query: str, n_results: int = 5, where: Dict = None) -> List[Dict]:
-        """Search similar chunks, optionally filtered by metadata (e.g. current version)."""
+        """Search similar chunks, optionally filtered by metadata."""
         if self.collection.count() == 0:
             return []
 
@@ -88,18 +99,18 @@ class VectorStore:
         return formatted
 
     def count_by_doc_id(self, doc_id: str) -> int:
-        """Return number of stored vectors for a document (used to verify deletion)."""
+        """Return number of stored vectors for a document."""
         results = self.collection.get(where={"doc_id": doc_id})
         return len(results['ids']) if results and results.get('ids') else 0
 
     def delete_by_doc_id(self, doc_id: str):
-        """Delete all chunks for a document"""
+        """Delete all chunks for a document."""
         results = self.collection.get(where={"doc_id": doc_id})
         if results['ids']:
             self.collection.delete(ids=results['ids'])
             print(f"Deleted {len(results['ids'])} chunks for doc {doc_id}")
 
     def clear_all(self):
-        """Clear all documents from collection"""
+        """Clear all documents from collection."""
         self.collection.delete(where={})
         print("Cleared all documents from vector store")

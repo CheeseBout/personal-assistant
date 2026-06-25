@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .core.logging_config import setup_logging
 
@@ -23,8 +23,10 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     from .models.database import init_db
+    from .models.migration_agent_core import run_migration
     init_db()
-    # Initialize Phase 3 components
+    run_migration()
+    # Initialize agent core components after default tools are seeded.
     from .services.tool_registry import ToolRegistry
     ToolRegistry.get_instance().initialize()
     print("Database initialized, ToolRegistry loaded")

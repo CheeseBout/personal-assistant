@@ -12,7 +12,7 @@ from typing import Dict, Any
 from .tool_registry import ToolRegistry
 from .permission_engine import PermissionEngine
 from .episodic_memory import EpisodicMemory
-from .file_tools import file_read, file_write, file_list, file_delete
+from .file_tools import file_read, file_write, file_list, file_delete, file_undo
 from .rag_tool import execute_rag_search
 from ..core.logging_config import logger
 
@@ -22,6 +22,7 @@ TOOL_EXECUTORS = {
     "file.write": file_write,
     "file.list": file_list,
     "file.delete": file_delete,
+    "file.undo": file_undo,
     "rag.search": execute_rag_search,
 }
 

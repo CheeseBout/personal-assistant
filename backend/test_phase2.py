@@ -1,4 +1,4 @@
-"""Automated unit tests for Phase 2 RAG components.
+﻿"""Automated unit tests for Phase 2 RAG components.
 
 Covers the parts that don't require network or heavy model downloads:
 chunking/parsing structure, FTS5 keyword index, RRF fusion, deletion verify,
@@ -19,7 +19,6 @@ from app.services.keyword_index import KeywordIndex
 from app.services.rag import RAGEngine
 from app.services import grounding
 
-
 # ---- Chunking / parsing ---------------------------------------------------
 
 def test_chunk_segments_preserves_metadata():
@@ -36,7 +35,6 @@ def test_chunk_segments_preserves_metadata():
     idxs = [c["index"] for c in chunks]
     assert idxs == list(range(len(idxs)))
 
-
 def test_md_parser_splits_by_heading():
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
         f.write("# Title\nintro\n## Section A\nbody a\n## Section B\nbody b\n")
@@ -47,7 +45,6 @@ def test_md_parser_splits_by_heading():
         assert "Section A" in headings and "Section B" in headings
     finally:
         os.unlink(path)
-
 
 # ---- FTS5 keyword index ---------------------------------------------------
 
@@ -61,7 +58,6 @@ def kw_index():
         os.unlink(tmp.name)
     except (PermissionError, OSError):
         pass  # Windows may briefly hold the sqlite temp file
-
 
 def test_keyword_index_add_search_delete(kw_index):
     chunks = [
@@ -78,12 +74,10 @@ def test_keyword_index_add_search_delete(kw_index):
     kw_index.delete_by_doc_id("doc1")
     assert kw_index.count_by_doc_id("doc1") == 0
 
-
 def test_keyword_search_handles_special_chars(kw_index):
     kw_index.add_chunks("d", [{"index": 0, "content": "alpha beta gamma"}], version=1)
     # Must not raise on punctuation-heavy queries
     assert kw_index.search("alpha: beta- gamma?") is not None
-
 
 # ---- RRF fusion -----------------------------------------------------------
 
@@ -99,7 +93,6 @@ def test_rrf_fuse_rewards_agreement():
     assert set(ids) == {"a", "b", "c"}
     assert all("fusion_score" in f for f in fused)
 
-
 # ---- Grounding / citation verifier ---------------------------------------
 
 def test_citation_coverage_detects_filename():
@@ -108,18 +101,15 @@ def test_citation_coverage_detects_filename():
     assert cov["cited_count"] == 1
     assert "contract.pdf" in cov["cited_sources"]
 
-
 def test_grounding_score_high_when_supported():
     chunks = [{"content": "Doanh thu quý 3 đạt 5 tỷ đồng tại chi nhánh Hà Nội."}]
     score = grounding.grounding_score("Doanh thu quý 3 đạt 5 tỷ đồng", chunks)
     assert score > 0.7
 
-
 def test_grounding_score_low_when_hallucinated():
     chunks = [{"content": "Doanh thu quý 3 đạt 5 tỷ đồng."}]
     score = grounding.grounding_score("Sao Hỏa có hai mặt trăng tên Phobos Deimos", chunks)
     assert score < 0.3
-
 
 def test_verify_answer_downgrades_ungrounded():
     sources = [{"filename": "a.pdf"}]
@@ -128,7 +118,6 @@ def test_verify_answer_downgrades_ungrounded():
         "Thủ đô nước Pháp là Paris.", sources, chunks, min_citations=1, min_grounding=0.3
     )
     assert verdict["accepted"] is False
-
 
 def test_verify_answer_accepts_refusal():
     verdict = grounding.verify_answer(

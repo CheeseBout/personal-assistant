@@ -1,8 +1,8 @@
-import os
-from typing import List, Dict, Any
-from openai import AsyncOpenAI, OpenAI
-from pydantic import BaseModel
+﻿import os
 import json
+from typing import List, Dict, Any, Optional
+
+from pydantic import BaseModel
 
 class Message(BaseModel):
     role: str
@@ -18,11 +18,28 @@ class LLMResponse(BaseModel):
 
 class LLMProvider:
     def __init__(self, api_key: str = None, base_url: str = None, model: str = "gpt-4o"):
-        resolved_key = api_key or os.getenv("OPENAI_API_KEY")
-        resolved_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        self.client = AsyncOpenAI(api_key=resolved_key, base_url=resolved_url)
-        self.sync_client = OpenAI(api_key=resolved_key, base_url=resolved_url)
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY") or ""
+        self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         self.model = model
+        self._async_client = None
+        self._sync_client = None
+
+    def _require_key(self) -> str:
+        if not self.api_key:
+            raise RuntimeError("OPENAI_API_KEY is required to call the LLM")
+        return self.api_key
+
+    def _get_sync_client(self):
+        if self._sync_client is None:
+            from openai import OpenAI
+            self._sync_client = OpenAI(api_key=self._require_key(), base_url=self.base_url)
+        return self._sync_client
+
+    def _get_async_client(self):
+        if self._async_client is None:
+            from openai import AsyncOpenAI
+            self._async_client = AsyncOpenAI(api_key=self._require_key(), base_url=self.base_url)
+        return self._async_client
 
     def chat(
         self,
@@ -35,7 +52,7 @@ class LLMProvider:
             {"role": m["role"], "content": m["content"]} for m in messages
         ]
         try:
-            response = self.sync_client.chat.completions.create(
+            response = self._get_sync_client().chat.completions.create(
                 model=self.model,
                 messages=formatted_messages,
                 tools=tools or None,
@@ -66,7 +83,6 @@ class LLMProvider:
         """Call LLM with messages and optional context"""
         formatted_messages = []
 
-        # Add system prompt with RAG context if provided
         if context:
             formatted_messages.append({
                 "role": "system",
@@ -77,13 +93,12 @@ Context:
 
 Rules:
 1. Answer based on the provided context.
-2. If the context doesn't contain relevant information, say "Không tìm thấy tài liệu phù hợp."
+2. If the context doesn't contain relevant information, say "KhÃ´ng tÃ¬m tháº¥y tÃ i liá»‡u phÃ¹ há»£p."
 3. Cite sources using format: [filename] or [filename, chunk X]
 4. Do not make up information outside the context.
 5. Answer in the same language as the question."""
             })
 
-        # Add conversation messages
         for msg in messages:
             formatted_messages.append({
                 "role": msg["role"],
@@ -91,7 +106,7 @@ Rules:
             })
 
         try:
-            response = await self.client.chat.completions.create(
+            response = await self._get_async_client().chat.completions.create(
                 model=self.model,
                 messages=formatted_messages,
                 tools=tools,

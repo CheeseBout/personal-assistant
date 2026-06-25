@@ -15,15 +15,21 @@ ASYNC_DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 # Sync database URL for migrations/init
 SYNC_DB_URL = f"sqlite:///{DB_PATH}"
 
-# Async engine and session
-async_engine = create_async_engine(ASYNC_DATABASE_URL, echo=False)
-AsyncSessionLocal = sessionmaker(
-    async_engine, class_=AsyncSession, expire_on_commit=False
-)
-
-# Sync engine for init_db
+# Sync engine for init_db and fallback operation
 engine = create_engine(SYNC_DB_URL, echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Async engine and session. In constrained local/dev environments aiosqlite may
+# be unavailable; async_db.py falls back to a small sync-backed adapter then.
+try:
+    async_engine = create_async_engine(ASYNC_DATABASE_URL, echo=False)
+    AsyncSessionLocal = sessionmaker(
+        async_engine, class_=AsyncSession, expire_on_commit=False
+    )
+except ModuleNotFoundError:
+    async_engine = None
+    AsyncSessionLocal = None
+
 Base = declarative_base()
 
 
@@ -97,7 +103,7 @@ class DocumentMetadata(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-# Phase 3 — Agent Core tables
+# Agent Core tables
 
 class Tool(Base):
     """Tool registry metadata."""
@@ -171,7 +177,7 @@ def _migrate_schema():
     wanted = {
         "documents": [("file_size", "INTEGER")],
         "chunks": [("version", "INTEGER DEFAULT 1")],
-        # Phase 3 tables will be created via create_all, but ensure indexes exist
+        # Agent Core tables will be created via create_all, but ensure indexes exist
         "short_term_memory": [("index", "idx_stm_session")],
         "episodic_events": [("index", "idx_episodic_session")],
         "approval_requests": [("index", "idx_approval_session")],

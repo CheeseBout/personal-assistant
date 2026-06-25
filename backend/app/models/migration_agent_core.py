@@ -1,6 +1,6 @@
-"""Database migration for Phase 3 — Agent Core tables.
+"""Database migration for Agent Core tables.
 
-Creates the tables required for Phase 3 if they don't exist, and seeds default
+Creates the tables required for Agent Core if they don't exist, and seeds default
 tools into the registry. Uses the stdlib sqlite3 driver directly so the script
 can run without the async driver installed.
 """
@@ -18,10 +18,10 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 DEFAULT_TOOLS = [
     {
         "name": "file.read",
-        "description": "Đọc nội dung file trong workspace",
+        "description": "Ã„ÂÃ¡Â»Âc nÃ¡Â»â„¢i dung file trong workspace",
         "input_schema": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Đường dẫn tương đối trong workspace"}},
+            "properties": {"path": {"type": "string", "description": "Ã„ÂÃ†Â°Ã¡Â»Âng dÃ¡ÂºÂ«n tÃ†Â°Ã†Â¡ng Ã„â€˜Ã¡Â»â€˜i trong workspace"}},
             "required": ["path"],
         },
         "risk_level": 0,
@@ -32,12 +32,12 @@ DEFAULT_TOOLS = [
     },
     {
         "name": "file.write",
-        "description": "Ghi nội dung vào file trong workspace",
+        "description": "Ghi nÃ¡Â»â„¢i dung vÃƒÂ o file trong workspace",
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Đường dẫn tương đối trong workspace"},
-                "content": {"type": "string", "description": "Nội dung để ghi"},
+                "path": {"type": "string", "description": "Ã„ÂÃ†Â°Ã¡Â»Âng dÃ¡ÂºÂ«n tÃ†Â°Ã†Â¡ng Ã„â€˜Ã¡Â»â€˜i trong workspace"},
+                "content": {"type": "string", "description": "NÃ¡Â»â„¢i dung Ã„â€˜Ã¡Â»Æ’ ghi"},
             },
             "required": ["path", "content"],
         },
@@ -49,10 +49,10 @@ DEFAULT_TOOLS = [
     },
     {
         "name": "file.list",
-        "description": "Liệt kê nội dung thư mục trong workspace",
+        "description": "LiÃ¡Â»â€¡t kÃƒÂª nÃ¡Â»â„¢i dung thÃ†Â° mÃ¡Â»Â¥c trong workspace",
         "input_schema": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Đường dẫn thư mục (mặc định là workspace root)"}},
+            "properties": {"path": {"type": "string", "description": "Ã„ÂÃ†Â°Ã¡Â»Âng dÃ¡ÂºÂ«n thÃ†Â° mÃ¡Â»Â¥c (mÃ¡ÂºÂ·c Ã„â€˜Ã¡Â»â€¹nh lÃƒÂ  workspace root)"}},
             "required": [],
         },
         "risk_level": 0,
@@ -63,10 +63,10 @@ DEFAULT_TOOLS = [
     },
     {
         "name": "file.delete",
-        "description": "Xóa file trong workspace",
+        "description": "XÃƒÂ³a file trong workspace",
         "input_schema": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Đường dẫn tương đối đến file cần xóa"}},
+            "properties": {"path": {"type": "string", "description": "Ã„ÂÃ†Â°Ã¡Â»Âng dÃ¡ÂºÂ«n tÃ†Â°Ã†Â¡ng Ã„â€˜Ã¡Â»â€˜i Ã„â€˜Ã¡ÂºÂ¿n file cÃ¡ÂºÂ§n xÃƒÂ³a"}},
             "required": ["path"],
         },
         "risk_level": 2,
@@ -76,13 +76,30 @@ DEFAULT_TOOLS = [
         "logs_sensitive_args": 0,
     },
     {
-        "name": "rag.search",
-        "description": "Tìm kiếm thông tin từ tài liệu đã upload",
+        "name": "file.undo",
+        "description": "KhÃƒÂ´i phÃ¡Â»Â¥c file tÃ¡Â»Â« snapshot Ã„â€˜ÃƒÂ£ tÃ¡ÂºÂ¡o trÃ†Â°Ã¡Â»â€ºc khi ghi/xÃƒÂ³a",
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Câu hỏi/từ khóa tìm kiếm"},
-                "n_results": {"type": "integer", "description": "Số lượng kết quả tối đa"},
+                "snapshot": {"type": "string", "description": "Ã„ÂÃ†Â°Ã¡Â»Âng dÃ¡ÂºÂ«n snapshot (tÃ†Â°Ã†Â¡ng Ã„â€˜Ã¡Â»â€˜i workspace) do write/delete trÃ¡ÂºÂ£ vÃ¡Â»Â"},
+                "path": {"type": "string", "description": "Ã„ÂÃ†Â°Ã¡Â»Âng dÃ¡ÂºÂ«n file Ã„â€˜ÃƒÂ­ch cÃ¡ÂºÂ§n khÃƒÂ´i phÃ¡Â»Â¥c"},
+            },
+            "required": ["snapshot", "path"],
+        },
+        "risk_level": 1,
+        "requires_approval": 0,
+        "rollback_type": "reversible",
+        "rollback_supported": 1,
+        "logs_sensitive_args": 0,
+    },
+    {
+        "name": "rag.search",
+        "description": "TÃƒÂ¬m kiÃ¡ÂºÂ¿m thÃƒÂ´ng tin tÃ¡Â»Â« tÃƒÂ i liÃ¡Â»â€¡u Ã„â€˜ÃƒÂ£ upload",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "CÃƒÂ¢u hÃ¡Â»Âi/tÃ¡Â»Â« khÃƒÂ³a tÃƒÂ¬m kiÃ¡ÂºÂ¿m"},
+                "n_results": {"type": "integer", "description": "SÃ¡Â»â€˜ lÃ†Â°Ã¡Â»Â£ng kÃ¡ÂºÂ¿t quÃ¡ÂºÂ£ tÃ¡Â»â€˜i Ã„â€˜a"},
             },
             "required": ["query"],
         },
@@ -96,8 +113,8 @@ DEFAULT_TOOLS = [
 
 
 def run_migration():
-    """Create Phase 3 tables and seed default tools."""
-    print(f"Running Phase 3 database migration on {DB_PATH}...")
+    """Create Agent Core tables and seed default tools."""
+    print(f"Running Agent Core database migration on {DB_PATH}...")
 
     conn = sqlite3.connect(str(DB_PATH))
     try:
@@ -196,7 +213,7 @@ def run_migration():
     finally:
         conn.close()
 
-    print("Phase 3 migration completed.")
+    print("Agent Core migration completed.")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,33 @@
-from pydantic_settings import BaseSettings
-from typing import List
+import os
+from typing import List, get_args, get_origin
+
+try:
+    from pydantic_settings import BaseSettings
+except ModuleNotFoundError:
+    class BaseSettings:
+        """Small env-based fallback when pydantic-settings is not installed."""
+
+        def __init__(self):
+            annotations = getattr(self.__class__, "__annotations__", {})
+            for name, annotation in annotations.items():
+                default = getattr(self.__class__, name, None)
+                value = os.getenv(name)
+                if value is None:
+                    setattr(self, name, default)
+                    continue
+                setattr(self, name, self._coerce(value, annotation, default))
+
+        @staticmethod
+        def _coerce(value, annotation, default):
+            if annotation is bool:
+                return value.lower() in ("1", "true", "yes", "on")
+            if annotation is int:
+                return int(value)
+            if annotation is float:
+                return float(value)
+            if get_origin(annotation) is list or annotation is List[str]:
+                return [item.strip() for item in value.split(",") if item.strip()]
+            return value
 
 
 class Settings(BaseSettings):
@@ -21,7 +49,7 @@ class Settings(BaseSettings):
 
     # File Storage
     UPLOAD_DIR: str = "../data/uploads"
-    MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
+    MAX_FILE_SIZE: int = 50 * 1024 * 1024
 
     # RAG Settings
     RAG_THRESHOLD: float = 0.5
@@ -31,14 +59,18 @@ class Settings(BaseSettings):
     RAG_CHUNK_OVERLAP: int = 100
 
     # Phase 2 - Hybrid search + Rerank
-    HYBRID_CANDIDATES: int = 20          # top-N candidates from each retriever
-    RRF_K: int = 60                      # Reciprocal Rank Fusion constant
+    HYBRID_CANDIDATES: int = 20
+    RRF_K: int = 60
     RERANK_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    RERANK_THRESHOLD: float = 0.0        # cross-encoder logit threshold
+    RERANK_THRESHOLD: float = 0.0
     USE_RERANK: bool = True
 
     # Phase 2 - Grounding / citation
-    CITATION_COVERAGE_MIN: int = 1       # min cited sources required in answer
+    CITATION_COVERAGE_MIN: int = 1
+
+    # Agent Core - Intent classifier
+    INTENT_CONFIDENCE_MIN: float = 0.6
+    INTENT_USE_LLM_FALLBACK: bool = True
 
     # CORS - local-first allowlist (avoid "*" with credentials)
     CORS_ORIGINS: List[str] = [
@@ -46,7 +78,7 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "null",  # file:// origin used when opening frontend/index.html directly
+        "null",
     ]
 
     class Config:

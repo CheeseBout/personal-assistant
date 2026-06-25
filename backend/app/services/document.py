@@ -134,11 +134,12 @@ class Chunker:
         overlap: int = None,
     ) -> List[Dict[str, Any]]:
         """Chunk each structured segment independently, preserving its metadata."""
-        from ..core.config import settings
-        if chunk_size is None:
-            chunk_size = settings.RAG_CHUNK_SIZE
-        if overlap is None:
-            overlap = settings.RAG_CHUNK_OVERLAP
+        if chunk_size is None or overlap is None:
+            from ..core.config import settings
+            if chunk_size is None:
+                chunk_size = settings.RAG_CHUNK_SIZE
+            if overlap is None:
+                overlap = settings.RAG_CHUNK_OVERLAP
 
         chunks: List[Dict[str, Any]] = []
         chunk_index = 0
