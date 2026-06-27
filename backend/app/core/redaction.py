@@ -23,6 +23,8 @@ SENSITIVE_KEY_NAMES = {
     "token", "access_token", "refresh_token", "api_key", "apikey",
     "authorization", "auth", "private_key", "privatekey",
     "credentials", "credential", "session_token",
+    # Browser (Phase 4): cookies / CSRF tokens must never reach logs.
+    "cookie", "cookies", "set-cookie", "csrf", "xsrf", "csrf_token", "xsrf_token",
 }
 
 # Pattern-based redaction for secret-shaped substrings inside free text.

@@ -14,6 +14,21 @@ from .permission_engine import PermissionEngine
 from .episodic_memory import EpisodicMemory
 from .file_tools import file_read, file_write, file_list, file_delete, file_undo
 from .rag_tool import execute_rag_search
+from .browser_tools import (
+    browser_open, browser_observe, browser_extract, browser_click,
+    browser_type, browser_screenshot, browser_wait, browser_close,
+    browser_download, browser_upload,
+)
+from .gmail_tools import (
+    gmail_search, gmail_read, gmail_thread_summary, gmail_list_attachments,
+    gmail_get_attachment, gmail_draft, gmail_send, gmail_label, gmail_trash,
+)
+from .drive_tools import (
+    drive_search, drive_read, drive_download, drive_upload,
+    drive_move, drive_rename, drive_trash,
+)
+from .docs_tools import docs_read, docs_create, docs_edit, docs_export
+from .sheets_tools import sheets_read, sheets_update, sheets_append, sheets_create
 from ..core.logging_config import logger
 from ..core.redaction import redact_arguments
 
@@ -25,6 +40,40 @@ TOOL_EXECUTORS = {
     "file.delete": file_delete,
     "file.undo": file_undo,
     "rag.search": execute_rag_search,
+    "browser.open": browser_open,
+    "browser.observe": browser_observe,
+    "browser.extract": browser_extract,
+    "browser.click": browser_click,
+    "browser.type": browser_type,
+    "browser.screenshot": browser_screenshot,
+    "browser.wait": browser_wait,
+    "browser.close": browser_close,
+    "browser.download": browser_download,
+    "browser.upload": browser_upload,
+    "gmail.search": gmail_search,
+    "gmail.read": gmail_read,
+    "gmail.thread_summary": gmail_thread_summary,
+    "gmail.list_attachments": gmail_list_attachments,
+    "gmail.get_attachment": gmail_get_attachment,
+    "gmail.draft": gmail_draft,
+    "gmail.send": gmail_send,
+    "gmail.label": gmail_label,
+    "gmail.trash": gmail_trash,
+    "drive.search": drive_search,
+    "drive.read": drive_read,
+    "drive.download": drive_download,
+    "drive.upload": drive_upload,
+    "drive.move": drive_move,
+    "drive.rename": drive_rename,
+    "drive.trash": drive_trash,
+    "docs.read": docs_read,
+    "docs.create": docs_create,
+    "docs.edit": docs_edit,
+    "docs.export": docs_export,
+    "sheets.read": sheets_read,
+    "sheets.update": sheets_update,
+    "sheets.append": sheets_append,
+    "sheets.create": sheets_create,
 }
 
 

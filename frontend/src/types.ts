@@ -117,3 +117,35 @@ export interface AgentSettings {
   use_rerank: boolean
   citation_coverage_min: number
 }
+
+export interface BrowserActionItem {
+  id: string
+  action: string
+  target: string | null
+  status: string
+  timestamp: string | null
+}
+
+export interface BrowserState {
+  session_id: string
+  current_url: string | null
+  title: string | null
+  is_active: boolean
+  screenshot: string | null // base64 PNG
+  actions: BrowserActionItem[]
+}
+
+export interface GoogleStatus {
+  connected: boolean
+  email: string | null
+  error?: string
+}
+
+export interface GoogleActionItem {
+  id: string
+  service: string
+  action: string
+  target: string | null
+  status: string
+  timestamp: string | null
+}

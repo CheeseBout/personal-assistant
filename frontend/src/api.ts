@@ -3,9 +3,12 @@ import type {
   AgentResponse,
   AgentSettings,
   AuditItem,
+  BrowserState,
   ChatMessage,
   DocumentItem,
   EventItem,
+  GoogleActionItem,
+  GoogleStatus,
   MemoryView,
   PendingApproval,
   ToolInfo,
@@ -118,6 +121,35 @@ export const api = {
 
   tools(): Promise<ToolInfo[]> {
     return req('/api/tools')
+  },
+
+  // --- Browser automation ---
+  browserState(sessionId: string, limit = 30): Promise<BrowserState> {
+    return req(`/api/browser/state?session_id=${encodeURIComponent(sessionId)}&limit=${limit}`)
+  },
+
+  browserClose(sessionId: string): Promise<Record<string, unknown>> {
+    return req('/api/browser/close', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId }),
+    })
+  },
+
+  // --- Google integrations (Gmail) ---
+  googleStatus(): Promise<GoogleStatus> {
+    return req('/api/google/status')
+  },
+
+  googleConnect(): Promise<GoogleStatus> {
+    return req('/api/google/connect', { method: 'POST' })
+  },
+
+  googleDisconnect(): Promise<GoogleStatus> {
+    return req('/api/google/disconnect', { method: 'POST' })
+  },
+
+  googleActions(sessionId: string, limit = 30): Promise<{ session_id: string; actions: GoogleActionItem[] }> {
+    return req(`/api/google/actions?session_id=${encodeURIComponent(sessionId)}&limit=${limit}`)
   },
 
   settings(): Promise<AgentSettings> {

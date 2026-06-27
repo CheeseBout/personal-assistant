@@ -12,6 +12,37 @@ cd backend
 pip install -r requirements.txt
 ```
 
+### Browser automation (Phase 4)
+
+Playwright needs its Chromium binary installed once (not managed by pip):
+
+```bash
+playwright install chromium
+```
+
+The agent browser runs **headed** by default (a window opens so you can watch it and
+handle 2FA/CAPTCHA). Set `BROWSER_HEADLESS=true` in `.env` to run hidden. Cookies/session
+are stored in `data/browser/profile` (a dedicated profile, never your personal browser).
+
+### Google integrations (Phase 5 — Gmail, Drive, Docs, Sheets)
+
+Uses the OAuth **Desktop (installed-app)** flow. One-time setup:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/): create a project, enable the **Gmail API**, **Drive API**, **Docs API**, and **Sheets API**, configure the OAuth consent screen (External, add yourself as a test user).
+2. Create an **OAuth client ID** of type **Desktop app**. Copy the client ID and secret.
+3. Add them to `.env` (see below).
+4. Start the server, open the **Google** panel in the UI, click **Kết nối Google**. A browser window opens for you to sign in (and 2FA). The token is cached locally at `data/google/token.json` and is never sent to the LLM or logged.
+
+**Re-auth when scopes change:** the cached token is bound to the scopes it was granted with. If you upgrade from a Gmail-only build to one that also includes Drive/Docs/Sheets (or otherwise change `GOOGLE_SCOPES`), the old token no longer covers the new scopes — in the Google panel click **Ngắt kết nối** then **Kết nối Google** once to re-consent.
+
+Read tools auto-allow (`gmail.search`/`read`, `drive.search`/`read`, `docs.read`, `sheets.read`).
+Every action that writes back to your Google account (`gmail.send`/`draft`/`label`/`trash`,
+`drive.upload`/`move`/`rename`/`trash`, `docs.create`/`edit`, `sheets.update`/`append`/`create`)
+requires HITL approval; `gmail.send` is the highest risk (strong confirmation). Deletes are
+implemented as **trash** (recoverable), never permanent. `drive.download`/`docs.export` write
+only into the agent workspace, and `drive.upload` reads only from it. All file/email/sheet
+content is treated as untrusted data.
+
 ## Configuration
 
 Create a `.env` file in the `backend/` directory:
@@ -21,6 +52,10 @@ OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_BASE_URL=https://api.openai.com/v1
 MODEL=gpt-4o
 EMBEDDING_MODEL=all-MiniLM-L6-v2
+
+# Phase 5 — Google (Gmail). From a Desktop-app OAuth client.
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
 ```
 
 **Note:** The embedding model uses `sentence-transformers` (local) which will download on first use. No OpenAI API key needed for embeddings.

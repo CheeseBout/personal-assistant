@@ -181,6 +181,61 @@ class EpisodicEvent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+# Phase 4 - Browser automation tables
+
+class BrowserSession(Base):
+    """Per-chat-session browser tab state (latest known)."""
+    __tablename__ = "browser_sessions"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False, index=True)
+    current_url = Column(String)
+    title = Column(String)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BrowserAction(Base):
+    """Append-only log of browser actions (open/click/type/...) for the viewer."""
+    __tablename__ = "browser_actions"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False, index=True)
+    action = Column(String)  # open, observe, extract, click, type, screenshot, wait, close
+    target = Column(String)
+    status = Column(String)  # success | error
+    details_json = Column(JSON, default={})
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class GmailAction(Base):
+    """Append-only log of Gmail actions (search/read/send/...) for the viewer."""
+    __tablename__ = "gmail_actions"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False, index=True)
+    action = Column(String)  # search, read, thread_summary, draft, send, label, trash, ...
+    target = Column(String)
+    status = Column(String)  # success | error
+    details_json = Column(JSON, default={})
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class GoogleWorkspaceAction(Base):
+    """Append-only log of Drive/Docs/Sheets actions for the viewer."""
+    __tablename__ = "google_workspace_actions"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False, index=True)
+    service = Column(String)  # drive | docs | sheets
+    action = Column(String)   # search, read, upload, move, rename, trash, create, edit, update, ...
+    target = Column(String)
+    status = Column(String)   # success | error
+    details_json = Column(JSON, default={})
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 def _migrate_schema():
     """Add columns introduced after the initial schema (lightweight, idempotent).
 

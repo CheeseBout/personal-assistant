@@ -7,9 +7,11 @@ import { TimelinePanel } from './panels/TimelinePanel'
 import { MemoryPanel } from './panels/MemoryPanel'
 import { AuditPanel } from './panels/AuditPanel'
 import { ToolsPanel } from './panels/ToolsPanel'
+import { BrowserPanel } from './panels/BrowserPanel'
+import { GooglePanel } from './panels/GooglePanel'
 import { SettingsPanel } from './panels/SettingsPanel'
 
-type View = 'chat' | 'documents' | 'timeline' | 'memory' | 'audit' | 'tools' | 'settings'
+type View = 'chat' | 'documents' | 'timeline' | 'memory' | 'audit' | 'tools' | 'browser' | 'google' | 'settings'
 
 const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'chat', label: 'Trò chuyện', icon: '💬' },
@@ -18,6 +20,8 @@ const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'memory', label: 'Bộ nhớ', icon: '🧠' },
   { id: 'audit', label: 'Nhật ký', icon: '📋' },
   { id: 'tools', label: 'Công cụ', icon: '🛠️' },
+  { id: 'browser', label: 'Trình duyệt', icon: '🌐' },
+  { id: 'google', label: 'Google', icon: '✉️' },
   { id: 'settings', label: 'Cài đặt', icon: '⚙️' },
 ]
 
@@ -134,6 +138,12 @@ export default function App() {
         {view === 'memory' && <MemoryPanel sessionId={sessionId} showToast={showToast} />}
         {view === 'audit' && <AuditPanel sessionId={sessionId} />}
         {view === 'tools' && <ToolsPanel />}
+        {view === 'browser' && (
+          <BrowserPanel sessionId={sessionId} onApprovalChange={refreshPending} showToast={showToast} />
+        )}
+        {view === 'google' && (
+          <GooglePanel sessionId={sessionId} onApprovalChange={refreshPending} showToast={showToast} />
+        )}
         {view === 'settings' && <SettingsPanel sessionId={sessionId} />}
       </div>
 

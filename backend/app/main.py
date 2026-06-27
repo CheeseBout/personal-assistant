@@ -8,6 +8,7 @@ from .api.upload import router as upload_router
 from .api.chat import router as chat_router
 from .api.debug import router as debug_router
 from .api.agent import router as agent_router
+from .api.google import router as google_router
 from .core.config import settings
 
 app = FastAPI(title="Local RAG Agent", version="0.1.0")
@@ -24,8 +25,14 @@ app.add_middleware(
 async def startup_event():
     from .models.database import init_db
     from .models.migration_agent_core import run_migration
+    from .models.migration_browser import run_migration as run_browser_migration
+    from .models.migration_google import run_migration as run_google_migration
+    from .models.migration_google_workspace import run_migration as run_google_workspace_migration
     init_db()
     run_migration()
+    run_browser_migration()
+    run_google_migration()
+    run_google_workspace_migration()
     # Initialize agent core components after default tools are seeded.
     from .services.tool_registry import ToolRegistry
     ToolRegistry.get_instance().initialize()
@@ -41,6 +48,7 @@ app.include_router(upload_router)
 app.include_router(chat_router)
 app.include_router(debug_router)
 app.include_router(agent_router)
+app.include_router(google_router)
 
 
 @app.get("/api/health")

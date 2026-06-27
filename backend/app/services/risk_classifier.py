@@ -43,8 +43,13 @@ class RiskClassifier:
         ]
         # Argument keys treated as file paths for path-based deny checks.
         self.path_keys = {
-            "path", "file", "filename", "snapshot", "target", "dest", "destination",
+            "path", "file", "filename", "snapshot", "target", "dest", "destination", "url",
         }
+        # Submit/destructive intents in a browser click/type target raise risk.
+        self.sensitive_action_words = (
+            "submit", "pay", "purchase", "buy", "checkout", "delete", "remove",
+            "send", "confirm", "transfer", "login", "sign in", "đăng nhập", "gửi", "xóa",
+        )
 
     def classify(self, tool_name: str, arguments: Dict[str, Any], tool_metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Determine risk level and suggest decision.
@@ -165,5 +170,13 @@ class RiskClassifier:
                 risk = max(risk, RiskLevel.MEDIUM.value)
                 matched_rules.append("large_retrieval")
                 explanation_parts.append("Large retrieval requested")
+
+        elif tool_name in ("browser.click", "browser.type"):
+            target = str(arguments.get("target", "")).lower()
+            submitting = bool(arguments.get("submit", False))
+            if submitting or any(w in target for w in self.sensitive_action_words):
+                risk = max(risk, RiskLevel.HIGH.value)
+                matched_rules.append("browser_sensitive_action")
+                explanation_parts.append("Browser action may submit/modify account data")
 
         return risk

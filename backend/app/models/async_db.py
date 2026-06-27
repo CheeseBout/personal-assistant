@@ -19,6 +19,10 @@ from .database import (  # noqa: F401
     ShortTermMemory,
     ShortTermMemoryHistory,
     EpisodicEvent,
+    BrowserSession,
+    BrowserAction,
+    GmailAction,
+    GoogleWorkspaceAction,
 )
 
 

@@ -307,3 +307,72 @@ async def list_registered_tools() -> List[Dict[str, Any]]:
         }
         for t in tools
     ]
+
+
+@router.get("/browser/state")
+async def browser_state(session_id: str, limit: int = 30) -> Dict[str, Any]:
+    """Live browser state for a session + recent action log.
+
+    Live URL/title/screenshot come from the in-memory BrowserManager; the action
+    history comes from the browser_actions table (already redacted at write time).
+    """
+    from ..services.browser_manager import BrowserManager
+    from ..models.database import BrowserAction
+
+    state = {"current_url": None, "title": None, "is_active": False}
+    screenshot = None
+    try:
+        mgr = BrowserManager.get_instance()
+        state = mgr.state(session_id)
+        if state.get("is_active"):
+            shot = mgr.screenshot(session_id)
+            if "error" not in shot:
+                screenshot = shot.get("image_b64")
+    except Exception as e:
+        logger.error(f"browser_state error: {e}")
+
+    sync_db = next(get_sync_db())
+    try:
+        stmt = (
+            select(BrowserAction)
+            .where(BrowserAction.session_id == session_id)
+            .order_by(BrowserAction.created_at.desc())
+            .limit(limit)
+        )
+        rows = sync_db.execute(stmt).scalars().all()
+        actions = [
+            {
+                "id": r.id,
+                "action": r.action,
+                "target": r.target,
+                "status": r.status,
+                "timestamp": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+    finally:
+        sync_db.close()
+
+    return {
+        "session_id": session_id,
+        "current_url": state.get("current_url"),
+        "title": state.get("title"),
+        "is_active": state.get("is_active", False),
+        "screenshot": screenshot,
+        "actions": actions,
+    }
+
+
+@router.post("/browser/close")
+async def browser_close_session(request: dict) -> Dict[str, Any]:
+    """Close the browser tab for a session."""
+    session_id = request.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    from ..services.browser_manager import BrowserManager
+    try:
+        result = BrowserManager.get_instance().close(session_id)
+        return {"success": "error" not in result, **result}
+    except Exception as e:
+        logger.error(f"browser_close error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

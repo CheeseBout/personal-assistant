@@ -72,6 +72,31 @@ class Settings(BaseSettings):
     INTENT_CONFIDENCE_MIN: float = 0.6
     INTENT_USE_LLM_FALLBACK: bool = True
 
+    # Phase 4 - Browser automation (Playwright)
+    BROWSER_HEADLESS: bool = False               # headed by default for observability + manual 2FA/CAPTCHA
+    BROWSER_PROFILE_DIR: str = "../data/browser/profile"
+    BROWSER_DOWNLOAD_DIR: str = "../data/browser/downloads"
+    BROWSER_SCREENSHOT_DIR: str = "../data/browser/screenshots"
+    BROWSER_DOMAIN_ALLOWLIST: str = ""          # comma-separated; "" = allow all
+    BROWSER_DOMAIN_BLOCKLIST: str = ""          # comma-separated
+    BROWSER_NAV_TIMEOUT_MS: int = 30000
+    BROWSER_OP_TIMEOUT_S: int = 45               # sync-bridge wait ceiling per browser op
+    BROWSER_DOWNLOAD_TIMEOUT_MS: int = 60000     # how long to wait for a download to start/finish
+
+    # Phase 5 - Google integrations (Gmail first). OAuth Desktop/installed-app flow.
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_TOKEN_PATH: str = "../data/google/token.json"     # local token cache, never sent to LLM/log
+    GOOGLE_ATTACHMENT_DIR: str = "../data/google/attachments"
+    GOOGLE_SCOPES: List[str] = [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/spreadsheets",
+    ]
+
     # CORS - local-first allowlist (avoid "*" with credentials)
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
