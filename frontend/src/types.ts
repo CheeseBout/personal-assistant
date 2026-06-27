@@ -149,3 +149,29 @@ export interface GoogleActionItem {
   status: string
   timestamp: string | null
 }
+
+export interface SandboxArtifact {
+  name: string
+  size: number
+}
+
+export interface SandboxRun {
+  id: string
+  kind: string // python | shell | install
+  mode: string // A | B | C | D | E
+  code: string // code or command (redacted/truncated)
+  status: string // success | error | killed | denied
+  exit_code: number | null
+  killed_reason: string | null
+  stdout: string
+  stderr: string
+  artifacts: SandboxArtifact[]
+  duration_ms: number | null
+  timestamp: string | null
+}
+
+export interface SandboxArtifactContent {
+  name: string
+  content: string
+  size: number
+}

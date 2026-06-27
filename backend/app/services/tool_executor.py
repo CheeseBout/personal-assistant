@@ -29,6 +29,10 @@ from .drive_tools import (
 )
 from .docs_tools import docs_read, docs_create, docs_edit, docs_export
 from .sheets_tools import sheets_read, sheets_update, sheets_append, sheets_create
+from .sandbox_tools import (
+    sandbox_python, sandbox_shell, sandbox_install,
+    sandbox_list_artifacts, sandbox_read_artifact,
+)
 from ..core.logging_config import logger
 from ..core.redaction import redact_arguments
 
@@ -74,6 +78,11 @@ TOOL_EXECUTORS = {
     "sheets.update": sheets_update,
     "sheets.append": sheets_append,
     "sheets.create": sheets_create,
+    "sandbox.python": sandbox_python,
+    "sandbox.shell": sandbox_shell,
+    "sandbox.install": sandbox_install,
+    "sandbox.list_artifacts": sandbox_list_artifacts,
+    "sandbox.read_artifact": sandbox_read_artifact,
 }
 
 

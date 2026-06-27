@@ -11,6 +11,8 @@ import type {
   GoogleStatus,
   MemoryView,
   PendingApproval,
+  SandboxArtifactContent,
+  SandboxRun,
   ToolInfo,
 } from './types'
 
@@ -150,6 +152,15 @@ export const api = {
 
   googleActions(sessionId: string, limit = 30): Promise<{ session_id: string; actions: GoogleActionItem[] }> {
     return req(`/api/google/actions?session_id=${encodeURIComponent(sessionId)}&limit=${limit}`)
+  },
+
+  // --- Sandbox (Phase 7) ---
+  sandboxRuns(sessionId: string, limit = 30): Promise<{ session_id: string; runs: SandboxRun[] }> {
+    return req(`/api/sandbox/runs?session_id=${encodeURIComponent(sessionId)}&limit=${limit}`)
+  },
+
+  sandboxArtifact(sessionId: string, name: string): Promise<SandboxArtifactContent> {
+    return req(`/api/sandbox/artifact?session_id=${encodeURIComponent(sessionId)}&name=${encodeURIComponent(name)}`)
   },
 
   settings(): Promise<AgentSettings> {

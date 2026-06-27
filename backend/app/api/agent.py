@@ -376,3 +376,56 @@ async def browser_close_session(request: dict) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"browser_close error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sandbox/runs")
+async def sandbox_runs(session_id: str, limit: int = 30) -> Dict[str, Any]:
+    """Recent sandbox executions for a session (code/command + stdout/stderr/artifacts)."""
+    from ..models.database import SandboxRun
+
+    sync_db = next(get_sync_db())
+    try:
+        stmt = (
+            select(SandboxRun)
+            .where(SandboxRun.session_id == session_id)
+            .order_by(SandboxRun.created_at.desc())
+            .limit(limit)
+        )
+        rows = sync_db.execute(stmt).scalars().all()
+        runs = [
+            {
+                "id": r.id,
+                "kind": r.kind,
+                "mode": r.mode,
+                "code": r.code,
+                "status": r.status,
+                "exit_code": r.exit_code,
+                "killed_reason": r.killed_reason,
+                "stdout": r.stdout_preview,
+                "stderr": r.stderr_preview,
+                "artifacts": r.artifacts_json or [],
+                "duration_ms": r.duration_ms,
+                "timestamp": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+    finally:
+        sync_db.close()
+
+    return {"session_id": session_id, "runs": runs}
+
+
+@router.get("/sandbox/artifact")
+async def sandbox_artifact(session_id: str, name: str) -> Dict[str, Any]:
+    """Read one artifact file from a session's sandbox directory."""
+    from ..services.sandbox_runner import SandboxRunner
+    try:
+        result = SandboxRunner.get_instance().read_artifact(session_id, name)
+        if "error" in result:
+            raise HTTPException(status_code=404, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"sandbox_artifact error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

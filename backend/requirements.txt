@@ -20,5 +20,6 @@ playwright==1.49.0
 google-api-python-client==2.149.0
 google-auth==2.35.0
 google-auth-oauthlib==1.2.1
+psutil==5.9.8
 pytest==7.4.4
 

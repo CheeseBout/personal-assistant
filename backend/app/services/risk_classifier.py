@@ -40,6 +40,11 @@ class RiskClassifier:
         self.command_deny_patterns = [
             r"rm\s+-rf\s+/",           # recursive root delete
             r":\(\)\s*\{\s*:\|:&\s*\};:",  # fork bomb
+            r"\bmkfs\b",               # format filesystem
+            r"\bdd\s+if=",             # raw disk write
+            r"(?i)\bformat\s+[a-z]:",  # windows format drive
+            r"(?i)\bdel\s+/[a-z]\s",   # windows recursive/force delete
+            r"(?i)\brmdir\s+/s",       # windows recursive rmdir
         ]
         # Argument keys treated as file paths for path-based deny checks.
         self.path_keys = {
@@ -178,5 +183,37 @@ class RiskClassifier:
                 risk = max(risk, RiskLevel.HIGH.value)
                 matched_rules.append("browser_sensitive_action")
                 explanation_parts.append("Browser action may submit/modify account data")
+
+        elif tool_name == "sandbox.shell":
+            # Static analysis of the shell command (REQUIREMENTS 15.4).
+            from .command_analyzer import analyze_command
+            command = str(arguments.get("command", ""))
+            analysis = analyze_command(command)
+            if analysis["network"]:
+                risk = max(risk, RiskLevel.HIGH.value)
+                matched_rules.append("sandbox_shell_network")
+                explanation_parts.append("Shell command uses network")
+            if analysis["writes_fs"]:
+                risk = max(risk, RiskLevel.MEDIUM.value)
+                matched_rules.append("sandbox_shell_writes")
+                explanation_parts.append("Shell command writes filesystem")
+            if analysis["reads_outside_workspace"]:
+                risk = max(risk, RiskLevel.HIGH.value)
+                matched_rules.append("sandbox_shell_outside_workspace")
+                explanation_parts.append("Shell command references paths outside workspace")
+            risk = max(risk, analysis["risk_level"])
+            matched_rules.extend(analysis["matched_rules"])
+
+        elif tool_name == "sandbox.python":
+            if arguments.get("allow_network"):
+                risk = max(risk, RiskLevel.HIGH.value)
+                matched_rules.append("sandbox_python_network")
+                explanation_parts.append("Python sandbox with network access (Mode C)")
+
+        elif tool_name == "sandbox.install":
+            # Package install always uses the network.
+            risk = max(risk, RiskLevel.HIGH.value)
+            matched_rules.append("sandbox_install_network")
+            explanation_parts.append("Package install requires network access")
 
         return risk

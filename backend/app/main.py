@@ -28,11 +28,13 @@ async def startup_event():
     from .models.migration_browser import run_migration as run_browser_migration
     from .models.migration_google import run_migration as run_google_migration
     from .models.migration_google_workspace import run_migration as run_google_workspace_migration
+    from .models.migration_sandbox import run_migration as run_sandbox_migration
     init_db()
     run_migration()
     run_browser_migration()
     run_google_migration()
     run_google_workspace_migration()
+    run_sandbox_migration()
     # Initialize agent core components after default tools are seeded.
     from .services.tool_registry import ToolRegistry
     ToolRegistry.get_instance().initialize()

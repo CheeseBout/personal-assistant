@@ -97,6 +97,15 @@ class Settings(BaseSettings):
         "https://www.googleapis.com/auth/spreadsheets",
     ]
 
+    # Phase 7 - Sandbox execution (process-based isolation)
+    SANDBOX_DIR: str = "../data/sandbox"
+    SANDBOX_DEFAULT_TIMEOUT_S: int = 15          # Mode A short timeout
+    SANDBOX_MAX_TIMEOUT_S: int = 120
+    SANDBOX_MAX_MEMORY_MB: int = 512
+    SANDBOX_MAX_OUTPUT_KB: int = 64
+    SANDBOX_ALLOW_NETWORK_DEFAULT: bool = False
+    SANDBOX_PIP_CACHE_DIR: str = "../data/sandbox/.pip-cache"
+
     # CORS - local-first allowlist (avoid "*" with credentials)
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",

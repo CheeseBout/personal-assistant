@@ -236,6 +236,27 @@ class GoogleWorkspaceAction(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+# Phase 7 - Sandbox execution tables
+
+class SandboxRun(Base):
+    """Append-only log of sandbox executions (python/shell/install) for the viewer."""
+    __tablename__ = "sandbox_runs"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False, index=True)
+    kind = Column(String)            # python | shell | install
+    mode = Column(String)            # A | B | C | D | E
+    code = Column(Text)              # code or command (redacted/truncated at write time)
+    status = Column(String)          # success | error | killed | denied
+    exit_code = Column(Integer)
+    killed_reason = Column(String)   # timeout | memory | None
+    stdout_preview = Column(Text)
+    stderr_preview = Column(Text)
+    artifacts_json = Column(JSON, default=[])
+    duration_ms = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 def _migrate_schema():
     """Add columns introduced after the initial schema (lightweight, idempotent).
 
