@@ -17,6 +17,7 @@ from .database import (  # noqa: F401
     Tool,
     ApprovalRequest,
     ShortTermMemory,
+    ShortTermMemoryHistory,
     EpisodicEvent,
 )
 

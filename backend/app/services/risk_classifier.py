@@ -23,21 +23,28 @@ class RiskClassifier:
     """Classify tool calls by risk level and suggest permission decision."""
 
     def __init__(self):
-        self.deny_patterns = [
-            # Path traversal attempts
-            r"\.\./",
-            r"^/etc/",
-            r"^C:\\Windows\\",
-            # Sensitive file patterns
-            r"\.env$",
+        # Patterns matched against PATH-like arguments only (the file being
+        # targeted). Matching these against free-form content caused false
+        # positives (e.g. a document mentioning "password" got hard-denied).
+        self.path_deny_patterns = [
+            r"\.\./",                  # directory traversal
+            r"^/etc/",                 # unix system files
+            r"^[A-Za-z]:\\Windows\\",  # windows system files
+            r"\.env$",                 # secret-bearing dotfiles
             r"\.pem$",
             r"\.key$",
-            r"password",
-            r"secret",
-            # Destructive patterns
-            r"rm\s+-rf",
-            r":\$\{0\}\}",
+            r"(^|[\\/])id_rsa",        # private key files
         ]
+        # Patterns matched against ALL argument text — destructive command
+        # shapes that should never appear regardless of which field they're in.
+        self.command_deny_patterns = [
+            r"rm\s+-rf\s+/",           # recursive root delete
+            r":\(\)\s*\{\s*:\|:&\s*\};:",  # fork bomb
+        ]
+        # Argument keys treated as file paths for path-based deny checks.
+        self.path_keys = {
+            "path", "file", "filename", "snapshot", "target", "dest", "destination",
+        }
 
     def classify(self, tool_name: str, arguments: Dict[str, Any], tool_metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Determine risk level and suggest decision.
@@ -83,12 +90,38 @@ class RiskClassifier:
             "matched_rules": matched_rules,
         }
 
+    def _workspace_file_exists(self, rel_path: str) -> bool:
+        """Check whether a path exists inside the real workspace, safely."""
+        if not rel_path:
+            return False
+        try:
+            from .file_tools import _resolve_path
+            return _resolve_path(rel_path).exists()
+        except Exception:
+            # Path outside workspace or unresolved — traversal is already
+            # caught by deny patterns; treat as non-existing here.
+            return False
+
     def _check_deny_patterns(self, arguments: Dict[str, Any], matched_rules: List[str]) -> bool:
-        """Check arguments against deny patterns."""
-        all_text = json.dumps(arguments, ensure_ascii=False).lower()
-        for pattern in self.deny_patterns:
+        """Check arguments against deny patterns.
+
+        Path-based patterns are tested only against path-like fields so that a
+        document's content mentioning "password" is not mistaken for a secret
+        file path. Command-based patterns are tested against all text.
+        """
+        # Path-based deny: only against fields that name a file/path.
+        for key, value in arguments.items():
+            if key in self.path_keys and isinstance(value, str):
+                for pattern in self.path_deny_patterns:
+                    if re.search(pattern, value, re.IGNORECASE):
+                        matched_rules.append(f"deny_path:{pattern}")
+                        return True
+
+        # Command-based deny: destructive shapes anywhere in the arguments.
+        all_text = json.dumps(arguments, ensure_ascii=False)
+        for pattern in self.command_deny_patterns:
             if re.search(pattern, all_text, re.IGNORECASE):
-                matched_rules.append(f"deny_pattern:{pattern}")
+                matched_rules.append(f"deny_command:{pattern}")
                 return True
         return False
 
@@ -118,11 +151,9 @@ class RiskClassifier:
                 risk = max(risk, RiskLevel.HIGH.value)
                 matched_rules.append("write_executable")
                 explanation_parts.append("Writing executable script")
-            # Overwriting existing files is medium risk
-            import os
-            workspace = "/workspace"
-            full_path = os.path.join(workspace, path)
-            if os.path.exists(full_path):
+            # Overwriting existing files is medium risk. Resolve against the
+            # real workspace root rather than a hardcoded "/workspace".
+            if self._workspace_file_exists(path):
                 risk = max(risk, RiskLevel.MEDIUM.value)
                 matched_rules.append("overwrite_existing")
                 explanation_parts.append("Overwriting existing file")

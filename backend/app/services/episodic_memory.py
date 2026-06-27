@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from ..models.database import get_sync_db, EpisodicEvent
 from ..core.logging_config import logger
+from ..core.redaction import redact_value
 
 
 class EpisodicMemory:
@@ -49,8 +50,8 @@ class EpisodicMemory:
                 session_id=session_id,
                 actor=actor,
                 action=action,
-                details_json=details,
-                metadata_json=metadata or {},
+                details_json=redact_value(details),
+                metadata_json=redact_value(metadata or {}),
                 created_at=datetime.utcnow()
             )
             db.add(event)

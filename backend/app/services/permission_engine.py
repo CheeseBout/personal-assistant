@@ -24,6 +24,7 @@ from .risk_classifier import RiskClassifier
 from .episodic_memory import EpisodicMemory
 from .short_term_memory import ShortTermMemoryManager
 from ..core.logging_config import logger
+from ..core.redaction import redact_value
 from ..models.database import get_sync_db, ApprovalRequest, AuditLog
 
 
@@ -216,7 +217,7 @@ class PermissionEngine:
             out.append({
                 "id": a.id,
                 "tool_name": a.tool_name,
-                "arguments": a.arguments_json,
+                "arguments": redact_value(a.arguments_json),
                 "reason": a.reason,
                 "risk_level": a.risk_level,
                 "requested_at": a.requested_at.isoformat() if a.requested_at else None,

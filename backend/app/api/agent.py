@@ -8,12 +8,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.async_db import get_async_db
-from ..models.database import ApprovalRequest, get_sync_db
+from ..models.database import ApprovalRequest, AuditLog, get_sync_db
 from ..services.agent_loop import AgentLoop
 from ..services.episodic_memory import EpisodicMemory
 from ..services.intent_classifier import IntentClassifier
 from ..services.permission_engine import PermissionEngine
+from ..services.short_term_memory import ShortTermMemoryManager
+from ..core.config import settings
 from ..core.logging_config import logger
+from ..core.redaction import redact_value
 
 router = APIRouter(prefix="/api", tags=["agent"])
 
@@ -173,3 +176,134 @@ async def continue_after_approval(
         return result
     finally:
         sync_db.close()
+
+
+@router.get("/events")
+async def list_events(
+    session_id: str,
+    limit: int = 50,
+    action: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Episodic event timeline for a session (tool activity, approvals, errors).
+
+    Events are already redacted at write time.
+    """
+    sync_db = next(get_sync_db())
+    try:
+        return EpisodicMemory.get_instance().get_events(
+            session_id, limit=limit, action=action, db=sync_db
+        )
+    finally:
+        sync_db.close()
+
+
+@router.get("/audit")
+async def list_audit(
+    session_id: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Audit log viewer. Optionally scoped to a session."""
+    sync_db = next(get_sync_db())
+    try:
+        stmt = select(AuditLog)
+        if session_id:
+            stmt = stmt.where(AuditLog.session_id == session_id)
+        stmt = stmt.order_by(AuditLog.timestamp.desc()).limit(limit)
+        rows = sync_db.execute(stmt).scalars().all()
+        return [
+            {
+                "id": r.id,
+                "session_id": r.session_id,
+                "actor": r.actor,
+                "action": r.action,
+                "details": redact_value(r.details or {}),
+                "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+            }
+            for r in rows
+        ]
+    finally:
+        sync_db.close()
+
+
+@router.get("/memory")
+async def list_memory(session_id: str) -> Dict[str, Any]:
+    """View short-term memory entries and their mutation history for a session."""
+    stm = ShortTermMemoryManager.get_instance()
+    sync_db = next(get_sync_db())
+    try:
+        entries = stm.get_all(session_id, db=sync_db)
+        visible = {k: v for k, v in entries.items() if k != "pending_agent_state"}
+        return {
+            "entries": redact_value(visible),
+            "history": stm.get_history(session_id, db=sync_db),
+        }
+    finally:
+        sync_db.close()
+
+
+@router.post("/memory/undo")
+async def undo_memory(request: dict) -> Dict[str, Any]:
+    """Revert the most recent memory mutation (optionally for a specific key)."""
+    session_id = request.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    key = request.get("key")
+    stm = ShortTermMemoryManager.get_instance()
+    sync_db = next(get_sync_db())
+    try:
+        result = stm.undo(session_id, key=key, db=sync_db)
+        if result.get("status") != "success":
+            raise HTTPException(status_code=404, detail=result.get("error", "Nothing to undo"))
+        return result
+    finally:
+        sync_db.close()
+
+
+@router.delete("/memory")
+async def delete_memory(session_id: str, key: str) -> Dict[str, Any]:
+    """Delete a single short-term memory key (history captured for undo)."""
+    stm = ShortTermMemoryManager.get_instance()
+    sync_db = next(get_sync_db())
+    try:
+        deleted = stm.delete(session_id, key, db=sync_db)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Key not found")
+        return {"success": True, "key": key}
+    finally:
+        sync_db.close()
+
+
+@router.get("/settings")
+async def agent_settings() -> Dict[str, Any]:
+    """Expose effective agent/provider settings (no secrets)."""
+    provider = "openrouter" if "openrouter" in (settings.OPENAI_BASE_URL or "").lower() else "openai"
+    return {
+        "provider": provider,
+        "base_url": settings.OPENAI_BASE_URL,
+        "model": settings.MODEL,
+        "default_model": settings.DEFAULT_MODEL,
+        "api_key_configured": bool(settings.OPENAI_API_KEY),
+        "embedding_model": settings.EMBEDDING_MODEL,
+        "use_local_embeddings": settings.USE_LOCAL_EMBEDDINGS,
+        "rag_threshold": settings.RAG_THRESHOLD,
+        "use_rerank": settings.USE_RERANK,
+        "citation_coverage_min": settings.CITATION_COVERAGE_MIN,
+    }
+
+
+@router.get("/tools")
+async def list_registered_tools() -> List[Dict[str, Any]]:
+    """List registered tools with risk metadata (for the UI tool catalog)."""
+    from ..services.tool_registry import ToolRegistry
+    tools = ToolRegistry.get_instance().list_tools()
+    return [
+        {
+            "name": t["name"],
+            "description": t["description"],
+            "risk_level": t["risk_level"],
+            "requires_approval": t["requires_approval"],
+            "rollback_supported": t["rollback_supported"],
+            "enabled": t["enabled"],
+        }
+        for t in tools
+    ]

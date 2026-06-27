@@ -151,6 +151,23 @@ class ShortTermMemory(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class ShortTermMemoryHistory(Base):
+    """Prior values of short-term memory keys, captured before each mutation.
+
+    Enables undo/rollback for memory (parallel to file snapshots). Each row is
+    the value as it existed *before* a set/delete operation.
+    """
+    __tablename__ = "short_term_memory_history"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False, index=True)
+    key = Column(String, nullable=False)
+    old_value_json = Column(JSON)  # None if the key did not exist before
+    operation = Column(String)  # "set" or "delete"
+    existed_before = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class EpisodicEvent(Base):
     """Append-only event log for agent actions."""
     __tablename__ = "episodic_events"

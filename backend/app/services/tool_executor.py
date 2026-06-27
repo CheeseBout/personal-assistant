@@ -15,6 +15,7 @@ from .episodic_memory import EpisodicMemory
 from .file_tools import file_read, file_write, file_list, file_delete, file_undo
 from .rag_tool import execute_rag_search
 from ..core.logging_config import logger
+from ..core.redaction import redact_arguments
 
 # Mapping tool name -> executor function
 TOOL_EXECUTORS = {
@@ -34,6 +35,12 @@ class ToolExecutor:
         self.registry = ToolRegistry.get_instance()
         self.permission = PermissionEngine()
         self.episodic = EpisodicMemory.get_instance()
+
+    def _safe_args(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Redact arguments for logging, honoring the tool's sensitivity flag."""
+        tool = self.registry.get_tool(tool_name)
+        sensitive = bool(tool and tool.get("logs_sensitive_args"))
+        return redact_arguments(arguments, sensitive=sensitive)
 
     def execute(self, tool_name: str, arguments: Dict[str, Any], session_id: str,
                 db=None) -> Dict[str, Any]:
@@ -86,7 +93,7 @@ class ToolExecutor:
                 action="tool_executed",
                 details={
                     "tool": tool_name,
-                    "arguments": arguments,
+                    "arguments": self._safe_args(tool_name, arguments),
                     "result_status": "success" if "error" not in result else "error",
                 },
                 db=db
@@ -98,7 +105,7 @@ class ToolExecutor:
                 session_id=session_id,
                 actor="tool_executor",
                 action="tool_error",
-                details={"tool": tool_name, "arguments": arguments, "error": str(e)},
+                details={"tool": tool_name, "arguments": self._safe_args(tool_name, arguments), "error": str(e)},
                 db=db
             )
             return {"status": "error", "tool": tool_name, "error": str(e)}
