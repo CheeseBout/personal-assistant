@@ -9,6 +9,8 @@ import type {
   EventItem,
   GoogleActionItem,
   GoogleStatus,
+  LtmItem,
+  LtmType,
   MemoryView,
   PendingApproval,
   SandboxArtifactContent,
@@ -119,6 +121,35 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ session_id: sessionId, key }),
     })
+  },
+
+  // --- Long-term memory (Phase 6): cross-session ---
+  ltmList(opts?: { type?: LtmType; q?: string; includeDisabled?: boolean }): Promise<{ items: LtmItem[]; count: number }> {
+    const p = new URLSearchParams()
+    if (opts?.type) p.set('type', opts.type)
+    if (opts?.q) p.set('q', opts.q)
+    if (opts?.includeDisabled !== undefined) p.set('include_disabled', String(opts.includeDisabled))
+    const qs = p.toString()
+    return req(`/api/ltm${qs ? `?${qs}` : ''}`)
+  },
+
+  ltmCreate(body: { content: string; type?: LtmType; tags?: string[] }): Promise<Record<string, unknown>> {
+    return req('/api/ltm', { method: 'POST', body: JSON.stringify(body) })
+  },
+
+  ltmUpdate(
+    id: string,
+    body: { content?: string; type?: LtmType; tags?: string[]; enabled?: boolean },
+  ): Promise<Record<string, unknown>> {
+    return req(`/api/ltm/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) })
+  },
+
+  ltmDelete(id: string): Promise<Record<string, unknown>> {
+    return req(`/api/ltm/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  ltmExport(): Promise<{ items: LtmItem[]; count: number; exported_at: string }> {
+    return req('/api/ltm/export')
   },
 
   tools(): Promise<ToolInfo[]> {

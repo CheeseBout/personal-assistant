@@ -1,6 +1,7 @@
 """Agent and approval API endpoints."""
 
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,6 +15,7 @@ from ..services.episodic_memory import EpisodicMemory
 from ..services.intent_classifier import IntentClassifier
 from ..services.permission_engine import PermissionEngine
 from ..services.short_term_memory import ShortTermMemoryManager
+from ..services.long_term_memory import LongTermMemoryManager
 from ..core.config import settings
 from ..core.logging_config import logger
 from ..core.redaction import redact_value
@@ -269,6 +271,101 @@ async def delete_memory(session_id: str, key: str) -> Dict[str, Any]:
         if not deleted:
             raise HTTPException(status_code=404, detail="Key not found")
         return {"success": True, "key": key}
+    finally:
+        sync_db.close()
+
+
+# --- Long-term memory (Phase 6): cross-session semantic/procedural/episodic ---
+
+@router.get("/ltm")
+async def list_ltm(type: Optional[str] = None, q: Optional[str] = None,
+                   include_disabled: bool = True) -> Dict[str, Any]:
+    """List or search long-term memory entries (cross-session)."""
+    ltm = LongTermMemoryManager.get_instance()
+    sync_db = next(get_sync_db())
+    try:
+        if q:
+            items = ltm.search(q, mem_type=type, limit=200,
+                               include_disabled=include_disabled, touch=False, db=sync_db)
+        else:
+            items = ltm.list_all(mem_type=type, include_disabled=include_disabled, db=sync_db)
+        return {"items": items, "count": len(items)}
+    finally:
+        sync_db.close()
+
+
+@router.post("/ltm")
+async def create_ltm(request: dict) -> Dict[str, Any]:
+    """Manually create a long-term memory entry."""
+    content = (request.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content required")
+    ltm = LongTermMemoryManager.get_instance()
+    sync_db = next(get_sync_db())
+    try:
+        result = ltm.save(
+            content=content,
+            mem_type=request.get("type", "semantic"),
+            source=request.get("source", "user"),
+            confidence=request.get("confidence"),
+            tags=request.get("tags"),
+            db=sync_db,
+        )
+        if result.get("status") != "success":
+            raise HTTPException(status_code=400, detail=result.get("error", "Could not save"))
+        return result
+    finally:
+        sync_db.close()
+
+
+@router.patch("/ltm/{memory_id}")
+async def update_ltm(memory_id: str, request: dict) -> Dict[str, Any]:
+    """Edit a long-term memory's content/type/tags, or toggle enabled."""
+    ltm = LongTermMemoryManager.get_instance()
+    sync_db = next(get_sync_db())
+    try:
+        if "enabled" in request and set(request.keys()) <= {"enabled"}:
+            result = ltm.set_enabled(memory_id, bool(request["enabled"]), db=sync_db)
+        else:
+            result = ltm.update(
+                memory_id,
+                content=request.get("content"),
+                mem_type=request.get("type"),
+                tags=request.get("tags"),
+                db=sync_db,
+            )
+            if result.get("status") == "success" and "enabled" in request:
+                result = ltm.set_enabled(memory_id, bool(request["enabled"]), db=sync_db)
+        if result.get("status") != "success":
+            code = 404 if "Không tìm thấy" in result.get("error", "") else 400
+            raise HTTPException(status_code=code, detail=result.get("error", "Could not update"))
+        return result
+    finally:
+        sync_db.close()
+
+
+@router.delete("/ltm/{memory_id}")
+async def delete_ltm(memory_id: str) -> Dict[str, Any]:
+    """Permanently delete a long-term memory entry."""
+    ltm = LongTermMemoryManager.get_instance()
+    sync_db = next(get_sync_db())
+    try:
+        result = ltm.delete(memory_id, db=sync_db)
+        if result.get("status") != "success":
+            raise HTTPException(status_code=404, detail=result.get("error", "Not found"))
+        return result
+    finally:
+        sync_db.close()
+
+
+@router.get("/ltm/export")
+async def export_ltm() -> Dict[str, Any]:
+    """Export all long-term memory entries (including disabled) for backup."""
+    ltm = LongTermMemoryManager.get_instance()
+    sync_db = next(get_sync_db())
+    try:
+        items = ltm.export_all(db=sync_db)
+        return {"items": items, "count": len(items), "exported_at": datetime.utcnow().isoformat()}
     finally:
         sync_db.close()
 

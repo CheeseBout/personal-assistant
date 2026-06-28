@@ -181,6 +181,32 @@ class EpisodicEvent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class LongTermMemory(Base):
+    """Durable cross-session memory (Phase 6).
+
+    The umbrella store for memory that persists beyond a single session. The
+    ``type`` column distinguishes the sub-kinds described in REQUIREMENTS §9:
+    - "semantic":   facts/preferences/conventions (e.g. "User prefers concise VN summaries")
+    - "procedural": reusable workflows ("how the user wants the weekly report built")
+    - "episodic":   a distilled, kept summary of a past event worth remembering
+
+    Unlike short-term memory this is NOT scoped to a session; ``source`` records
+    provenance (where the memory came from, e.g. "conversation:sess_123").
+    """
+    __tablename__ = "long_term_memory"
+
+    id = Column(String, primary_key=True)
+    type = Column(String, default="semantic", index=True)  # semantic | procedural | episodic
+    content = Column(Text, nullable=False)
+    source = Column(String)            # provenance, e.g. "conversation:sess_123", "user"
+    confidence = Column(Integer)       # 0-100 (stored as int to avoid float drift)
+    tags_json = Column(JSON, default=[])
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_used_at = Column(DateTime)
+
+
 # Phase 4 - Browser automation tables
 
 class BrowserSession(Base):

@@ -33,6 +33,7 @@ from .sandbox_tools import (
     sandbox_python, sandbox_shell, sandbox_install,
     sandbox_list_artifacts, sandbox_read_artifact,
 )
+from .memory_tools import memory_save, memory_search
 from ..core.logging_config import logger
 from ..core.redaction import redact_arguments
 
@@ -83,6 +84,8 @@ TOOL_EXECUTORS = {
     "sandbox.install": sandbox_install,
     "sandbox.list_artifacts": sandbox_list_artifacts,
     "sandbox.read_artifact": sandbox_read_artifact,
+    "memory.save": memory_save,
+    "memory.search": memory_search,
 }
 
 

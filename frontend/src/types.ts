@@ -96,6 +96,21 @@ export interface MemoryView {
   }>
 }
 
+export type LtmType = 'semantic' | 'procedural' | 'episodic'
+
+export interface LtmItem {
+  id: string
+  type: LtmType
+  content: string
+  source: string | null
+  confidence: number | null
+  tags: string[]
+  enabled: boolean
+  created_at: string | null
+  updated_at: string | null
+  last_used_at: string | null
+}
+
 export interface ToolInfo {
   name: string
   description: string

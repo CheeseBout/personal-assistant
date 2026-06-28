@@ -87,3 +87,21 @@ def redact_arguments(arguments: Any, sensitive: bool = False) -> Any:
         return {k: (REDACTED if isinstance(v, str) else redact_value(v))
                 for k, v in arguments.items()}
     return redact_value(arguments)
+
+
+def contains_secret(text: str) -> bool:
+    """Return True if ``text`` looks like it carries a secret.
+
+    Used by the memory store to refuse persisting credentials (REQUIREMENTS §9.7).
+    A string is flagged when redaction would change it (a secret pattern matched)
+    or when a secret-signalling keyword appears alongside a value.
+    """
+    if not isinstance(text, str) or not text:
+        return False
+    if redact_text(text) != text:
+        return True
+    lowered = text.lower()
+    for name in SENSITIVE_KEY_NAMES:
+        if name in lowered:
+            return True
+    return False
