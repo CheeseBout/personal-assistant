@@ -370,6 +370,96 @@ async def export_ltm() -> Dict[str, Any]:
         sync_db.close()
 
 
+# --- News + Scheduler (Phase 8) ---
+
+@router.post("/news/summarize")
+async def news_summarize(request: dict) -> Dict[str, Any]:
+    """Generate a news/web summary report on demand (multi-source, with links)."""
+    query = (request.get("query") or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query required")
+    from ..services.news_service import generate_report
+    sync_db = next(get_sync_db())
+    try:
+        result = generate_report(query, max_sources=request.get("max_sources"), db=sync_db)
+        if result.get("status") == "error":
+            raise HTTPException(status_code=502, detail=result.get("error", "News generation failed"))
+        return result
+    finally:
+        sync_db.close()
+
+
+@router.get("/news/reports")
+async def news_reports(limit: int = 30, task_id: Optional[str] = None) -> Dict[str, Any]:
+    """List recent news reports (newest first)."""
+    from ..services.news_service import list_reports
+    sync_db = next(get_sync_db())
+    try:
+        items = list_reports(limit=limit, task_id=task_id, db=sync_db)
+        return {"items": items, "count": len(items)}
+    finally:
+        sync_db.close()
+
+
+@router.get("/scheduler/tasks")
+async def scheduler_tasks() -> Dict[str, Any]:
+    """List all scheduled tasks."""
+    from ..services.scheduler import SchedulerManager
+    items = SchedulerManager.get_instance().list_tasks()
+    return {"items": items, "count": len(items)}
+
+
+@router.post("/scheduler/tasks")
+async def create_scheduler_task(request: dict) -> Dict[str, Any]:
+    """Create a scheduled task (only safe kinds allowed)."""
+    name = request.get("name", "")
+    schedule = request.get("schedule", "")
+    params = request.get("params", {})
+    kind = request.get("kind", "news_summary")
+    if not schedule:
+        raise HTTPException(status_code=400, detail="schedule required (e.g. 'interval:3600' or 'cron:8 0')")
+    from ..services.scheduler import SchedulerManager
+    result = SchedulerManager.get_instance().create_task(
+        name=name, schedule=schedule, params=params, kind=kind,
+        enabled=bool(request.get("enabled", True)),
+    )
+    if result.get("status") != "success":
+        raise HTTPException(status_code=400, detail=result.get("error", "Could not create task"))
+    return result
+
+
+@router.patch("/scheduler/tasks/{task_id}")
+async def update_scheduler_task(task_id: str, request: dict) -> Dict[str, Any]:
+    """Enable/disable a scheduled task."""
+    if "enabled" not in request:
+        raise HTTPException(status_code=400, detail="enabled required")
+    from ..services.scheduler import SchedulerManager
+    result = SchedulerManager.get_instance().set_enabled(task_id, bool(request["enabled"]))
+    if result.get("status") != "success":
+        raise HTTPException(status_code=404, detail=result.get("error", "Not found"))
+    return result
+
+
+@router.post("/scheduler/tasks/{task_id}/run")
+async def run_scheduler_task(task_id: str) -> Dict[str, Any]:
+    """Run a scheduled task immediately."""
+    from ..services.scheduler import SchedulerManager
+    result = SchedulerManager.get_instance().run_now(task_id)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result.get("error", "Could not run"))
+    return result
+
+
+@router.delete("/scheduler/tasks/{task_id}")
+async def delete_scheduler_task(task_id: str) -> Dict[str, Any]:
+    """Delete a scheduled task."""
+    from ..services.scheduler import SchedulerManager
+    result = SchedulerManager.get_instance().delete_task(task_id)
+    if result.get("status") != "success":
+        raise HTTPException(status_code=404, detail=result.get("error", "Not found"))
+    return result
+
+
 @router.get("/settings")
 async def agent_settings() -> Dict[str, Any]:
     """Expose effective agent/provider settings (no secrets)."""

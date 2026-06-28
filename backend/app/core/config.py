@@ -106,6 +106,16 @@ class Settings(BaseSettings):
     SANDBOX_ALLOW_NETWORK_DEFAULT: bool = False
     SANDBOX_PIP_CACHE_DIR: str = "../data/sandbox/.pip-cache"
 
+    # Phase 8 - Web search + News + Scheduler
+    WEB_SEARCH_PROVIDER: str = "duckduckgo"       # duckduckgo (default, no key) | tavily | serpapi
+    WEB_SEARCH_MAX_RESULTS: int = 8
+    WEB_SEARCH_TIMEOUT_S: int = 15
+    TAVILY_API_KEY: str = ""                       # used only if provider=tavily
+    SERPAPI_API_KEY: str = ""                      # used only if provider=serpapi
+    SCHEDULER_ENABLED: bool = True
+    SCHEDULER_MIN_INTERVAL_S: int = 300            # floor for interval jobs (avoid runaway)
+    NEWS_DEFAULT_MAX_SOURCES: int = 5
+
     # CORS - local-first allowlist (avoid "*" with credentials)
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",

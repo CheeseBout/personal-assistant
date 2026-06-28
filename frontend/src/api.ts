@@ -12,9 +12,11 @@ import type {
   LtmItem,
   LtmType,
   MemoryView,
+  NewsReport,
   PendingApproval,
   SandboxArtifactContent,
   SandboxRun,
+  ScheduledTask,
   ToolInfo,
 } from './types'
 
@@ -196,5 +198,43 @@ export const api = {
 
   settings(): Promise<AgentSettings> {
     return req('/api/settings')
+  },
+
+  // --- News + Scheduler (Phase 8) ---
+  newsSummarize(body: { query: string; max_sources?: number }): Promise<{ status: string; report?: NewsReport; error?: string }> {
+    return req('/api/news/summarize', { method: 'POST', body: JSON.stringify(body) })
+  },
+
+  newsReports(limit = 30): Promise<{ items: NewsReport[]; count: number }> {
+    return req(`/api/news/reports?limit=${limit}`)
+  },
+
+  schedulerTasks(): Promise<{ items: ScheduledTask[]; count: number }> {
+    return req('/api/scheduler/tasks')
+  },
+
+  createSchedulerTask(body: {
+    name: string
+    schedule: string
+    params?: Record<string, unknown>
+    kind?: string
+    enabled?: boolean
+  }): Promise<Record<string, unknown>> {
+    return req('/api/scheduler/tasks', { method: 'POST', body: JSON.stringify(body) })
+  },
+
+  updateSchedulerTask(id: string, enabled: boolean): Promise<Record<string, unknown>> {
+    return req(`/api/scheduler/tasks/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    })
+  },
+
+  runSchedulerTask(id: string): Promise<Record<string, unknown>> {
+    return req(`/api/scheduler/tasks/${encodeURIComponent(id)}/run`, { method: 'POST' })
+  },
+
+  deleteSchedulerTask(id: string): Promise<Record<string, unknown>> {
+    return req(`/api/scheduler/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
 }

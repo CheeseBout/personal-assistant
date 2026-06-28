@@ -283,6 +283,42 @@ class SandboxRun(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+# Phase 8 - News + Scheduler tables
+
+class ScheduledTask(Base):
+    """A recurring/one-off job the scheduler runs (e.g. periodic news summary).
+
+    Only safe task kinds are allowed (REQUIREMENTS §20.2): a scheduled task must
+    never auto-perform a dangerous action. ``kind`` is restricted at creation
+    time to the safe set (news_summary for now).
+    """
+    __tablename__ = "scheduled_tasks"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    kind = Column(String, default="news_summary")  # safe kinds only
+    schedule = Column(String)            # "interval:3600" (seconds) or "cron:H M"
+    params_json = Column(JSON, default={})  # e.g. {"query": "...", "max_sources": 5}
+    enabled = Column(Boolean, default=True)
+    last_run_at = Column(DateTime)
+    last_status = Column(String)         # success | error | running | None
+    next_run_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NewsReport(Base):
+    """A generated news/web-search summary report (on demand or scheduled)."""
+    __tablename__ = "news_reports"
+
+    id = Column(String, primary_key=True)
+    task_id = Column(String, index=True)   # source scheduled task, or None for on-demand
+    query = Column(String)
+    summary = Column(Text)
+    sources_json = Column(JSON, default=[])  # [{title, url, snippet, published}]
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 def _migrate_schema():
     """Add columns introduced after the initial schema (lightweight, idempotent).
 

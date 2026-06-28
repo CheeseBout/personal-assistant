@@ -30,6 +30,7 @@ async def startup_event():
     from .models.migration_google_workspace import run_migration as run_google_workspace_migration
     from .models.migration_sandbox import run_migration as run_sandbox_migration
     from .models.migration_memory import run_migration as run_memory_migration
+    from .models.migration_news import run_migration as run_news_migration
     init_db()
     run_migration()
     run_browser_migration()
@@ -37,10 +38,20 @@ async def startup_event():
     run_google_workspace_migration()
     run_sandbox_migration()
     run_memory_migration()
+    run_news_migration()
     # Initialize agent core components after default tools are seeded.
     from .services.tool_registry import ToolRegistry
     ToolRegistry.get_instance().initialize()
+    # Start the background scheduler (Phase 8). Degrades gracefully if APScheduler is absent.
+    from .services.scheduler import SchedulerManager
+    SchedulerManager.get_instance().start()
     print("Database initialized, ToolRegistry loaded")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    from .services.scheduler import SchedulerManager
+    SchedulerManager.get_instance().shutdown()
 
 
 @app.get("/")

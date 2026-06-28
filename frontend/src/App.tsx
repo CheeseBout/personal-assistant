@@ -10,9 +10,10 @@ import { ToolsPanel } from './panels/ToolsPanel'
 import { BrowserPanel } from './panels/BrowserPanel'
 import { GooglePanel } from './panels/GooglePanel'
 import { SandboxPanel } from './panels/SandboxPanel'
+import { NewsPanel } from './panels/NewsPanel'
 import { SettingsPanel } from './panels/SettingsPanel'
 
-type View = 'chat' | 'documents' | 'timeline' | 'memory' | 'audit' | 'tools' | 'browser' | 'google' | 'sandbox' | 'settings'
+type View = 'chat' | 'documents' | 'timeline' | 'memory' | 'audit' | 'tools' | 'browser' | 'google' | 'sandbox' | 'news' | 'settings'
 
 const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'chat', label: 'Trò chuyện', icon: '💬' },
@@ -24,6 +25,7 @@ const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'browser', label: 'Trình duyệt', icon: '🌐' },
   { id: 'google', label: 'Google', icon: '✉️' },
   { id: 'sandbox', label: 'Sandbox', icon: '🧪' },
+  { id: 'news', label: 'Tin tức', icon: '📰' },
   { id: 'settings', label: 'Cài đặt', icon: '⚙️' },
 ]
 
@@ -147,6 +149,7 @@ export default function App() {
           <GooglePanel sessionId={sessionId} onApprovalChange={refreshPending} showToast={showToast} />
         )}
         {view === 'sandbox' && <SandboxPanel sessionId={sessionId} showToast={showToast} />}
+        {view === 'news' && <NewsPanel showToast={showToast} />}
         {view === 'settings' && <SettingsPanel sessionId={sessionId} />}
       </div>
 

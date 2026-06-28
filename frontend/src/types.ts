@@ -190,3 +190,31 @@ export interface SandboxArtifactContent {
   content: string
   size: number
 }
+
+export interface NewsSource {
+  title: string
+  url: string
+  snippet: string
+  published: string | null
+}
+
+export interface NewsReport {
+  id: string
+  task_id: string | null
+  query: string
+  summary: string
+  sources: NewsSource[]
+  created_at: string | null
+}
+
+export interface ScheduledTask {
+  id: string
+  name: string
+  kind: string
+  schedule: string
+  params: Record<string, unknown>
+  enabled: boolean
+  last_run_at: string | null
+  last_status: string | null
+  created_at: string | null
+}
