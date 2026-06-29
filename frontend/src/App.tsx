@@ -152,7 +152,7 @@ export default function App() {
         )}
         {view === 'sandbox' && <SandboxPanel sessionId={sessionId} showToast={showToast} />}
         {view === 'news' && <NewsPanel showToast={showToast} />}
-        {view === 'desktop' && <DesktopPanel sessionId={sessionId} showToast={showToast} />}
+        {view === 'desktop' && <DesktopPanel sessionId={sessionId} showToast={showToast} onApprovalChange={refreshPending} />}
         {view === 'settings' && <SettingsPanel sessionId={sessionId} />}
       </div>
 

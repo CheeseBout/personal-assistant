@@ -7,6 +7,7 @@ import { fmtDateTime } from './util'
 interface Props {
   sessionId: string
   showToast: (msg: string) => void
+  onApprovalChange?: () => void
 }
 
 export function DesktopPanel({ sessionId, showToast }: Props) {
@@ -16,6 +17,7 @@ export function DesktopPanel({ sessionId, showToast }: Props) {
   const [busy, setBusy] = useState(false)
   const [showWindows, setShowWindows] = useState(false)
   const [expandedA11y, setExpandedA11y] = useState<Set<string>>(new Set())
+  const [controlEnabled, setControlEnabled] = useState<boolean>(false)
 
   const load = useCallback(async () => {
     try {
@@ -30,6 +32,9 @@ export function DesktopPanel({ sessionId, showToast }: Props) {
 
   useEffect(() => {
     load()
+    api.settings()
+      .then((s) => setControlEnabled(Boolean(s.desktop_control_enabled)))
+      .catch(() => setControlEnabled(false))
   }, [load])
 
   const observe = async () => {
@@ -87,7 +92,7 @@ export function DesktopPanel({ sessionId, showToast }: Props) {
     <div className="panel-body">
       {/* Header + actions */}
       <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <span>Quan sát màn hình (chỉ đọc)</span>
+        <span>Màn hình {controlEnabled ? '(quan sát + điều khiển)' : '(chỉ đọc)'}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           <button className="btn btn-sm" onClick={observe} disabled={busy}>
             {busy ? 'Đang quan sát…' : 'Quan sát ngay'}
@@ -101,10 +106,20 @@ export function DesktopPanel({ sessionId, showToast }: Props) {
         </div>
       </div>
 
-      <div className="faint" style={{ fontSize: 12, marginBottom: 8, textTransform: 'none' }}>
-        Agent chỉ xem, đọc và tóm tắt màn hình. Không điều khiển chuột/bàn phím. Văn bản nhạy cảm được che, ảnh chụp
-        lưu cục bộ.
-      </div>
+      {controlEnabled ? (
+        <div
+          className="faint"
+          style={{ fontSize: 12, marginBottom: 8, textTransform: 'none', color: '#b45309' }}
+        >
+          ⚠ Điều khiển desktop đã BẬT. Agent có thể click, gõ phím và di chuột — nhưng mọi hành động
+          thay đổi trạng thái đều cần bạn xác nhận trước khi thực thi (xem ở tab Dòng thời gian/Chat).
+        </div>
+      ) : (
+        <div className="faint" style={{ fontSize: 12, marginBottom: 8, textTransform: 'none' }}>
+          Agent chỉ xem, đọc và tóm tắt màn hình. Không điều khiển chuột/bàn phím. Để bật điều khiển, đặt
+          DESKTOP_ENABLE_CONTROL=true trong .env và khởi động lại. Văn bản nhạy cảm được che, ảnh chụp lưu cục bộ.
+        </div>
+      )}
 
       {/* Window list (toggle) */}
       {showWindows && windows.length > 0 && (

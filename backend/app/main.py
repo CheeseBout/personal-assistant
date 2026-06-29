@@ -32,6 +32,7 @@ async def startup_event():
     from .models.migration_memory import run_migration as run_memory_migration
     from .models.migration_news import run_migration as run_news_migration
     from .models.migration_desktop import run_migration as run_desktop_migration
+    from .models.migration_desktop_control import run_migration as run_desktop_control_migration
     init_db()
     run_migration()
     run_browser_migration()
@@ -41,6 +42,7 @@ async def startup_event():
     run_memory_migration()
     run_news_migration()
     run_desktop_migration()
+    run_desktop_control_migration()
     # Initialize agent core components after default tools are seeded.
     from .services.tool_registry import ToolRegistry
     ToolRegistry.get_instance().initialize()

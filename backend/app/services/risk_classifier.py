@@ -216,4 +216,29 @@ class RiskClassifier:
             matched_rules.append("sandbox_install_network")
             explanation_parts.append("Package install requires network access")
 
+        elif tool_name in ("desktop.click", "desktop.type", "desktop.key", "desktop.drag"):
+            # Phase 10: controlling the real desktop. Escalate dangerous shapes
+            # to CRITICAL; all of these already force ask_strong (base risk 2).
+            if tool_name == "desktop.type":
+                target = (str(arguments.get("name", "")) + " " +
+                          str(arguments.get("auto_id", ""))).lower()
+                secret_fields = ("password", "mật khẩu", "mat khau", "pin", "otp", "cvv", "passcode")
+                if any(w in target for w in secret_fields):
+                    risk = max(risk, RiskLevel.CRITICAL.value)
+                    matched_rules.append("desktop_type_secret_field")
+                    explanation_parts.append("Typing into a credential/OTP field")
+            elif tool_name == "desktop.key":
+                keys = str(arguments.get("keys", "")).lower().replace(" ", "")
+                dangerous_combos = ("win+r", "ctrl+alt+del", "ctrl+alt+delete", "alt+f4", "win+e")
+                if keys in dangerous_combos:
+                    risk = max(risk, RiskLevel.CRITICAL.value)
+                    matched_rules.append("desktop_key_system_combo")
+                    explanation_parts.append("Dangerous system key combination")
+            else:  # desktop.click / desktop.drag
+                target = str(arguments.get("name", "")).lower()
+                if any(w in target for w in self.sensitive_action_words):
+                    risk = max(risk, RiskLevel.HIGH.value)
+                    matched_rules.append("desktop_sensitive_action")
+                    explanation_parts.append("Clicking a submit/destructive control")
+
         return risk

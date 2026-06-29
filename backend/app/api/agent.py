@@ -533,6 +533,7 @@ async def agent_settings() -> Dict[str, Any]:
         "rag_threshold": settings.RAG_THRESHOLD,
         "use_rerank": settings.USE_RERANK,
         "citation_coverage_min": settings.CITATION_COVERAGE_MIN,
+        "desktop_control_enabled": settings.DESKTOP_ENABLE_CONTROL,
     }
 
 

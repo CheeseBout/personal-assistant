@@ -131,6 +131,7 @@ export interface AgentSettings {
   rag_threshold: number
   use_rerank: boolean
   citation_coverage_min: number
+  desktop_control_enabled?: boolean
 }
 
 export interface BrowserActionItem {

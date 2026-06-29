@@ -36,6 +36,10 @@ from .sandbox_tools import (
 from .memory_tools import memory_save, memory_search
 from .news_tools import web_search_tool, news_summarize_tool
 from .desktop_tools import desktop_observe, desktop_active_window, desktop_ui_elements, desktop_list_windows
+from .desktop_control_tools import (
+    desktop_click, desktop_type, desktop_key, desktop_mouse_move,
+    desktop_scroll, desktop_drag, desktop_wait,
+)
 from ..core.logging_config import logger
 from ..core.redaction import redact_arguments
 
@@ -94,6 +98,13 @@ TOOL_EXECUTORS = {
     "desktop.active_window": desktop_active_window,
     "desktop.ui_elements": desktop_ui_elements,
     "desktop.list_windows": desktop_list_windows,
+    "desktop.click": desktop_click,
+    "desktop.type": desktop_type,
+    "desktop.key": desktop_key,
+    "desktop.mouse_move": desktop_mouse_move,
+    "desktop.scroll": desktop_scroll,
+    "desktop.drag": desktop_drag,
+    "desktop.wait": desktop_wait,
 }
 
 

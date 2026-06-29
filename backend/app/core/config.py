@@ -3,7 +3,35 @@ from typing import List, get_args, get_origin
 
 try:
     from pydantic_settings import BaseSettings
+    from pydantic_settings.sources import DotEnvSettingsSource, EnvSettingsSource
+
+    def _csv_fallback(value):
+        """Split a plain CSV string into a list (for non-JSON list env values)."""
+        if isinstance(value, str):
+            return [v.strip() for v in value.split(",") if v.strip()]
+        raise ValueError("not a CSV string")
+
+    class _CsvDotEnvSource(DotEnvSettingsSource):
+        """.env source that accepts plain CSV for List fields (not just JSON)."""
+
+        def decode_complex_value(self, field_name, field, value):
+            try:
+                return super().decode_complex_value(field_name, field, value)
+            except Exception:
+                return _csv_fallback(value)
+
+    class _CsvEnvSource(EnvSettingsSource):
+        """os.environ source that accepts plain CSV for List fields."""
+
+        def decode_complex_value(self, field_name, field, value):
+            try:
+                return super().decode_complex_value(field_name, field, value)
+            except Exception:
+                return _csv_fallback(value)
+
+    _USING_PYDANTIC = True
 except ModuleNotFoundError:
+    _USING_PYDANTIC = False
     class BaseSettings:
         """Small env-based fallback when pydantic-settings is not installed."""
 
@@ -125,6 +153,12 @@ class Settings(BaseSettings):
     DESKTOP_A11Y_MAX_ELEMENTS: int = 80            # max UI elements from accessibility tree
     DESKTOP_MONITOR_INTERVAL_S: int = 60           # periodic monitor interval (min 30)
 
+    # Phase 10 - Desktop control (click/type/keyboard/mouse). High risk: opt-in + HITL.
+    DESKTOP_ENABLE_CONTROL: bool = False           # opt-in: bật điều khiển chuột/phím
+    DESKTOP_CONTROL_WINDOW_ALLOWLIST: str = ""     # "" = mọi cửa sổ; CSV tiêu đề nếu giới hạn
+    DESKTOP_CONTROL_MOVE_DURATION_S: float = 0.2   # smooth mouse-move duration (pyautogui)
+    DESKTOP_CONTROL_VERIFY_DEFAULT: bool = True    # re-observe sau hành động để xác nhận
+
     # CORS - local-first allowlist (avoid "*" with credentials)
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
@@ -138,6 +172,18 @@ class Settings(BaseSettings):
         env_file = ".env"
         case_sensitive = True
         extra = "ignore"
+
+    if _USING_PYDANTIC:
+        @classmethod
+        def settings_customise_sources(cls, settings_cls, init_settings,
+                                       env_settings, dotenv_settings, file_secret_settings):
+            # Swap in CSV-tolerant env sources so List fields accept "a,b,c".
+            return (
+                init_settings,
+                _CsvEnvSource(settings_cls),
+                _CsvDotEnvSource(settings_cls),
+                file_secret_settings,
+            )
 
 
 settings = Settings()
