@@ -13,6 +13,8 @@ import { SandboxPanel } from './panels/SandboxPanel'
 import { NewsPanel } from './panels/NewsPanel'
 import { DesktopPanel } from './panels/DesktopPanel'
 import { SettingsPanel } from './panels/SettingsPanel'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import type { ChatSessionItem } from './types'
 
 type View = 'chat' | 'documents' | 'timeline' | 'memory' | 'audit' | 'tools' | 'browser' | 'google' | 'sandbox' | 'news' | 'desktop' | 'settings'
 
@@ -53,6 +55,9 @@ export default function App() {
   })
   const [pendingCount, setPendingCount] = useState(0)
   const [toast, setToast] = useState<string | null>(null)
+  const [sessions, setSessions] = useState<ChatSessionItem[]>([])
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
 
   useEffect(() => {
     localStorage.setItem('session_id', sessionId)
@@ -72,17 +77,64 @@ export default function App() {
     }
   }, [sessionId])
 
+  const refreshSessions = useCallback(async () => {
+    try {
+      const list = await api.sessions(15)
+      setSessions(list)
+    } catch {
+      setSessions([])
+    }
+  }, [])
+
   useEffect(() => {
     refreshPending()
+    refreshSessions()
     const t = window.setInterval(refreshPending, 5000)
     return () => window.clearInterval(t)
-  }, [refreshPending])
+  }, [refreshPending, refreshSessions])
 
   const startNewSession = () => {
     const id = newSessionId()
     setSessionId(id)
     setView('chat')
     showToast('Đã tạo phiên mới')
+  }
+
+  const switchSession = (id: string) => {
+    setSessionId(id)
+    setView('chat')
+  }
+
+  const startRename = (s: ChatSessionItem, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setRenamingId(s.id)
+    setRenameDraft(s.title || '')
+  }
+
+  const commitRename = async (id: string) => {
+    const newTitle = renameDraft.trim()
+    setRenamingId(null)
+    if (!newTitle) return
+    try {
+      await api.renameSession(id, newTitle)
+      await refreshSessions()
+    } catch (e) {
+      showToast(`Đổi tên thất bại: ${(e as Error).message}`)
+    }
+  }
+
+  const removeSession = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirm('Xoá phiên chat này?')) return
+    try {
+      await api.deleteSession(id)
+      await refreshSessions()
+      if (id === sessionId) {
+        startNewSession()
+      }
+    } catch (e2) {
+      showToast(`Xoá thất bại: ${(e2 as Error).message}`)
+    }
   }
 
   const title = NAV.find((n) => n.id === view)?.label || ''
@@ -99,6 +151,54 @@ export default function App() {
           <span className="nav-icon">➕</span>
           <span>Phiên mới</span>
         </button>
+
+        {sessions.length > 0 && (
+          <div className="sessions-section">
+            <div className="sessions-label">Phiên gần đây</div>
+            {sessions.map((s) => (
+              <div
+                key={s.id}
+                className={`session-item${s.id === sessionId ? ' active' : ''}`}
+                onClick={() => switchSession(s.id)}
+                title={s.title || s.id}
+              >
+                {renamingId === s.id ? (
+                  <input
+                    autoFocus
+                    className="session-title"
+                    value={renameDraft}
+                    onChange={(e) => setRenameDraft(e.target.value)}
+                    onBlur={() => commitRename(s.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitRename(s.id)
+                      if (e.key === 'Escape') setRenamingId(null)
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ width: '100%', background: 'transparent', border: 'none', color: 'inherit', outline: 'none' }}
+                  />
+                ) : (
+                  <span className="session-title">{s.title || '(không tên)'}</span>
+                )}
+                <span className="session-actions">
+                  <button
+                    className="session-action-btn"
+                    title="Đổi tên"
+                    onClick={(e) => startRename(s, e)}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    className="session-action-btn"
+                    title="Xoá"
+                    onClick={(e) => removeSession(s.id, e)}
+                  >
+                    🗑
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div style={{ height: 8 }} />
 
@@ -134,26 +234,33 @@ export default function App() {
           </button>
         </header>
 
-        {view === 'chat' && (
-          <ChatPanel sessionId={sessionId} onApprovalChange={refreshPending} showToast={showToast} />
-        )}
-        {view === 'documents' && <DocumentsPanel showToast={showToast} />}
-        {view === 'timeline' && (
-          <TimelinePanel sessionId={sessionId} onApprovalChange={refreshPending} showToast={showToast} />
-        )}
-        {view === 'memory' && <MemoryPanel sessionId={sessionId} showToast={showToast} />}
-        {view === 'audit' && <AuditPanel sessionId={sessionId} />}
-        {view === 'tools' && <ToolsPanel />}
-        {view === 'browser' && (
-          <BrowserPanel sessionId={sessionId} onApprovalChange={refreshPending} showToast={showToast} />
-        )}
-        {view === 'google' && (
-          <GooglePanel sessionId={sessionId} onApprovalChange={refreshPending} showToast={showToast} />
-        )}
-        {view === 'sandbox' && <SandboxPanel sessionId={sessionId} showToast={showToast} />}
-        {view === 'news' && <NewsPanel showToast={showToast} />}
-        {view === 'desktop' && <DesktopPanel sessionId={sessionId} showToast={showToast} onApprovalChange={refreshPending} />}
-        {view === 'settings' && <SettingsPanel sessionId={sessionId} />}
+        <ErrorBoundary label={view}>
+          {view === 'chat' && (
+            <ChatPanel
+              sessionId={sessionId}
+              onApprovalChange={refreshPending}
+              onSessionsChange={refreshSessions}
+              showToast={showToast}
+            />
+          )}
+          {view === 'documents' && <DocumentsPanel showToast={showToast} />}
+          {view === 'timeline' && (
+            <TimelinePanel sessionId={sessionId} onApprovalChange={refreshPending} showToast={showToast} />
+          )}
+          {view === 'memory' && <MemoryPanel sessionId={sessionId} showToast={showToast} />}
+          {view === 'audit' && <AuditPanel sessionId={sessionId} />}
+          {view === 'tools' && <ToolsPanel />}
+          {view === 'browser' && (
+            <BrowserPanel sessionId={sessionId} onApprovalChange={refreshPending} showToast={showToast} />
+          )}
+          {view === 'google' && (
+            <GooglePanel sessionId={sessionId} onApprovalChange={refreshPending} showToast={showToast} />
+          )}
+          {view === 'sandbox' && <SandboxPanel sessionId={sessionId} showToast={showToast} />}
+          {view === 'news' && <NewsPanel showToast={showToast} />}
+          {view === 'desktop' && <DesktopPanel sessionId={sessionId} showToast={showToast} onApprovalChange={refreshPending} />}
+          {view === 'settings' && <SettingsPanel sessionId={sessionId} />}
+        </ErrorBoundary>
       </div>
 
       {toast && <div className="toast">{toast}</div>}

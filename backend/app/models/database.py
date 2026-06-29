@@ -341,6 +341,37 @@ class DesktopObservation(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+# Chat session metadata (Phase 1 completion).
+
+class ChatSession(Base):
+    """Named chat session for the sidebar list.
+
+    A row appears the first time a session receives a message. The title is
+    auto-generated from the first user message (truncated). Users can rename
+    or archive a session from the UI.
+    """
+    __tablename__ = "chat_sessions"
+
+    id = Column(String, primary_key=True)
+    title = Column(String)
+    archived = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AppSetting(Base):
+    """Runtime-mutable settings overriding values from .env.
+
+    Single-row-per-key store. The SettingsManager singleton loads these into
+    memory at startup and applies them as overrides on top of `settings.*`.
+    """
+    __tablename__ = "app_settings"
+
+    key = Column(String, primary_key=True)
+    value_json = Column(JSON)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 def _migrate_schema():
     """Add columns introduced after the initial schema (lightweight, idempotent).
 

@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .core.logging_config import setup_logging
+from .core.logging_config import setup_logging, logger
 
 setup_logging()
 
@@ -9,6 +9,7 @@ from .api.chat import router as chat_router
 from .api.debug import router as debug_router
 from .api.agent import router as agent_router
 from .api.google import router as google_router
+from .api.settings import router as settings_router
 from .core.config import settings
 
 app = FastAPI(title="Local RAG Agent", version="0.1.0")
@@ -46,10 +47,19 @@ async def startup_event():
     # Initialize agent core components after default tools are seeded.
     from .services.tool_registry import ToolRegistry
     ToolRegistry.get_instance().initialize()
+    # Load any persisted RAG/runtime settings overrides from the DB.
+    from .services.settings_manager import SettingsManager
+    SettingsManager.get_instance().load()
+    # Eagerly construct the RAG engine so the heavy embedding/rerank models
+    # are loaded at startup rather than on the first user request. The
+    # singleton lives in services.rag_singleton, so every later get_rag_engine
+    # call reuses this instance.
+    from .services.rag_singleton import get_rag_engine
+    get_rag_engine()
     # Start the background scheduler (Phase 8). Degrades gracefully if APScheduler is absent.
     from .services.scheduler import SchedulerManager
     SchedulerManager.get_instance().start()
-    print("Database initialized, ToolRegistry loaded")
+    logger.info("Database initialized, ToolRegistry loaded, RAG engine ready")
 
 
 @app.on_event("shutdown")
@@ -68,6 +78,7 @@ app.include_router(chat_router)
 app.include_router(debug_router)
 app.include_router(agent_router)
 app.include_router(google_router)
+app.include_router(settings_router)
 
 
 @app.get("/api/health")

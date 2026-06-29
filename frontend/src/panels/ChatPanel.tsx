@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState, useCallback } from 'react'
 import { api } from '../api'
-import type { AgentResponse, ChatMessage } from '../types'
+import type { AgentResponse, ChatMessage, ChatStreamEvent, Citation } from '../types'
 import { riskBadge } from './util'
+import { Markdown } from '../components/Markdown'
 
 interface Props {
   sessionId: string
   onApprovalChange: () => void
+  onSessionsChange?: () => void
   showToast: (msg: string) => void
 }
 
@@ -29,20 +31,33 @@ interface ApprovalPrompt {
 let idSeq = 0
 const localId = () => `local-${Date.now()}-${idSeq++}`
 
-export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
+const SCROLL_NEAR_BOTTOM_PX = 100
+
+export function ChatPanel({ sessionId, onApprovalChange, onSessionsChange, showToast }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [streaming, setStreaming] = useState<string>('') // currently-streaming assistant text
+  const [streamingCitations, setStreamingCitations] = useState<Citation[]>([])
+  const [streamVerdict, setStreamVerdict] = useState<null | { accepted: boolean; grounding?: number }>(null)
   const [intentPrompt, setIntentPrompt] = useState<IntentPrompt | null>(null)
   const [approvalPrompt, setApprovalPrompt] = useState<ApprovalPrompt | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  // Track latest messages for callbacks that would otherwise capture stale state.
+  const messagesRef = useRef<ChatMessage[]>([])
+  messagesRef.current = messages
+  // Whether the user is currently parked near the bottom — only auto-scroll then.
+  const stickToBottomRef = useRef(true)
 
   // Load history when session changes.
   useEffect(() => {
     let cancelled = false
     setIntentPrompt(null)
     setApprovalPrompt(null)
+    setStreaming('')
+    setStreamingCitations([])
+    setStreamVerdict(null)
     api
       .history(sessionId)
       .then((h) => {
@@ -65,11 +80,19 @@ export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
     }
   }, [sessionId])
 
-  // Autoscroll to bottom on new content.
+  // Track whether the user is near the bottom so we don't fight their scroll.
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+    stickToBottomRef.current = distance < SCROLL_NEAR_BOTTOM_PX
+  }, [])
+
+  // Autoscroll to bottom on new content, but only if user is already there.
   useEffect(() => {
     const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [messages, intentPrompt, approvalPrompt, busy])
+    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight
+  }, [messages, intentPrompt, approvalPrompt, busy, streaming])
 
   const autoGrow = () => {
     const ta = taRef.current
@@ -81,8 +104,8 @@ export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
   const push = (m: Omit<ChatMessage, 'id'>) =>
     setMessages((prev) => [...prev, { ...m, id: localId() }])
 
-  // Translate an AgentResponse into chat state (handles all statuses).
-  const handleResponse = (resp: AgentResponse) => {
+  // Translate an AgentResponse (non-streaming /api/agent path) into chat state.
+  const handleAgentResponse = (resp: AgentResponse) => {
     if (resp.status === 'intent_confirmation') {
       setIntentPrompt({
         message: resp.response,
@@ -111,7 +134,7 @@ export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
     push({ role: 'assistant', content: resp.response, citations: resp.citations })
   }
 
-  const send = async (text: string, opts?: { intent_confirmed?: boolean; suggested_route?: string }) => {
+  const sendNonStreaming = async (text: string, opts?: { intent_confirmed?: boolean; suggested_route?: string }) => {
     setBusy(true)
     try {
       const resp = await api.agent({
@@ -120,10 +143,71 @@ export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
         intent_confirmed: opts?.intent_confirmed,
         suggested_route: opts?.suggested_route,
       })
-      handleResponse(resp)
+      handleAgentResponse(resp)
     } catch (e) {
       push({ role: 'assistant', content: `Lỗi: ${(e as Error).message}`, kind: 'error' })
     } finally {
+      setBusy(false)
+    }
+  }
+
+  // Streaming send via SSE. Falls back to non-streaming on failure.
+  const sendStreaming = async (text: string) => {
+    setBusy(true)
+    setStreaming('')
+    setStreamingCitations([])
+    setStreamVerdict(null)
+    let buffer = ''
+    let citations: Citation[] = []
+    let verdict: { accepted: boolean; grounding?: number } | null = null
+    let gotAnyDelta = false
+    try {
+      await api.chatStream({ message: text, session_id: sessionId }, (e: ChatStreamEvent) => {
+        if (e.type === 'retrieval') {
+          citations = e.sources || []
+          setStreamingCitations(citations)
+        } else if (e.type === 'delta') {
+          gotAnyDelta = true
+          buffer += e.content
+          setStreaming(buffer)
+        } else if (e.type === 'verdict') {
+          verdict = { accepted: e.accepted, grounding: e.grounding }
+          setStreamVerdict(verdict)
+        } else if (e.type === 'error') {
+          throw new Error(e.message || 'Streaming error')
+        }
+        // 'done' just ends the loop; we flush below.
+      })
+      // Flush streaming buffer into the message list once.
+      if (gotAnyDelta) {
+        const v = verdict as { accepted: boolean; grounding?: number } | null
+        const finalCitations = v && !v.accepted ? [] : citations
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: localId(),
+            role: 'assistant',
+            content: buffer,
+            citations: finalCitations,
+          },
+        ])
+      }
+      // Refresh sidebar sessions list (might be new title)
+      onSessionsChange?.()
+    } catch (e) {
+      // If we got partial content, keep it; otherwise show the error
+      if (buffer.trim()) {
+        setMessages((prev) => [
+          ...prev,
+          { id: localId(), role: 'assistant', content: buffer + `\n\n[Lỗi: ${(e as Error).message}]`, kind: 'error' },
+        ])
+      } else {
+        push({ role: 'assistant', content: `Lỗi: ${(e as Error).message}`, kind: 'error' })
+      }
+    } finally {
+      setStreaming('')
+      setStreamingCitations([])
+      setStreamVerdict(null)
       setBusy(false)
     }
   }
@@ -136,7 +220,10 @@ export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
     setIntentPrompt(null)
     setApprovalPrompt(null)
     push({ role: 'user', content: text })
-    await send(text)
+    // Force scroll to bottom on user submit (they expect to see their message)
+    stickToBottomRef.current = true
+    // Stream by default. Non-streaming path is used for intent confirm + approvals.
+    await sendStreaming(text)
   }
 
   const confirmIntent = async (proceed: boolean) => {
@@ -146,10 +233,10 @@ export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
       push({ role: 'assistant', content: 'Đã huỷ. Bạn có thể nhập lại yêu cầu.', kind: 'info' })
       return
     }
-    // Re-send the last user message, now confirmed.
-    const lastUser = [...messages].reverse().find((m) => m.role === 'user')
+    // Re-send the last user message, now confirmed (use ref to avoid stale closure).
+    const lastUser = [...messagesRef.current].reverse().find((m) => m.role === 'user')
     if (!lastUser) return
-    await send(lastUser.content, {
+    await sendNonStreaming(lastUser.content, {
       intent_confirmed: true,
       suggested_route: prompt?.suggested_route,
     })
@@ -168,7 +255,7 @@ export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
         approved: approve,
       })
       onApprovalChange()
-      handleResponse(resp)
+      handleAgentResponse(resp)
       showToast(approve ? 'Đã duyệt hành động' : 'Đã từ chối hành động')
     } catch (e) {
       push({ role: 'assistant', content: `Lỗi xử lý phê duyệt: ${(e as Error).message}`, kind: 'error' })
@@ -184,11 +271,11 @@ export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
     }
   }
 
-  const empty = messages.length === 0 && !intentPrompt && !approvalPrompt && !busy
+  const empty = messages.length === 0 && !intentPrompt && !approvalPrompt && !busy && !streaming
 
   return (
     <div className="chat">
-      <div className="chat-scroll" ref={scrollRef}>
+      <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-inner">
           {empty && (
             <div className="empty">
@@ -199,6 +286,35 @@ export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
           {messages.map((m) => (
             <MessageBubble key={m.id} msg={m} />
           ))}
+
+          {/* Live streaming bubble */}
+          {streaming && (
+            <div className="msg-row">
+              <div className="avatar assistant">PA</div>
+              <div className="bubble assistant">
+                <Markdown content={streaming} />
+                {streamingCitations.length > 0 && (
+                  <div className="citations">
+                    {streamingCitations.map((c, i) => (
+                      <span className="citation" key={i}>
+                        {String(c.filename || c.file || 'nguồn')}
+                        {c.chunk != null ? ` · ${c.chunk}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {streamVerdict && !streamVerdict.accepted && (
+                  <div className="verdict-warn">
+                    Cảnh báo: câu trả lời có thể không đủ bằng chứng từ tài liệu
+                    {typeof streamVerdict.grounding === 'number'
+                      ? ` (độ bám: ${(streamVerdict.grounding * 100).toFixed(0)}%)`
+                      : ''}
+                    .
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {intentPrompt && (
             <div className="msg-row">
@@ -263,7 +379,7 @@ export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
             </div>
           )}
 
-          {busy && (
+          {busy && !streaming && (
             <div className="msg-row">
               <div className="avatar assistant">PA</div>
               <div className="bubble assistant">
@@ -306,14 +422,15 @@ export function ChatPanel({ sessionId, onApprovalChange, showToast }: Props) {
   )
 }
 
-function MessageBubble({ msg }: { msg: ChatMessage }) {
+const MessageBubble = memo(function MessageBubble({ msg }: { msg: ChatMessage }) {
   if (msg.role === 'system') return null
   const isUser = msg.role === 'user'
+  const initial = isUser ? '👤' : 'PA'
   return (
     <div className={`msg-row${isUser ? ' user' : ''}`}>
-      <div className={`avatar ${isUser ? 'user' : 'assistant'}`}>{isUser ? 'B' : 'PA'}</div>
+      <div className={`avatar ${isUser ? 'user' : 'assistant'}`}>{initial}</div>
       <div className={`bubble ${isUser ? 'user' : msg.kind === 'error' ? 'error' : 'assistant'}`}>
-        {msg.content}
+        {isUser ? <span className="user-text">{msg.content}</span> : <Markdown content={msg.content} />}
         {msg.citations && msg.citations.length > 0 && (
           <div className="citations">
             {msg.citations.map((c, i) => (
@@ -327,4 +444,4 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
       </div>
     </div>
   )
-}
+})

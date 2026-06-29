@@ -5,6 +5,8 @@ import type {
   AuditItem,
   BrowserState,
   ChatMessage,
+  ChatSessionItem,
+  ChatStreamEvent,
   DesktopObservation,
   DesktopObserveResult,
   DesktopWindow,
@@ -17,6 +19,7 @@ import type {
   MemoryView,
   NewsReport,
   PendingApproval,
+  RagSettings,
   SandboxArtifactContent,
   SandboxRun,
   ScheduledTask,
@@ -68,6 +71,69 @@ export const api = {
     return req(`/api/chat/history/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
   },
 
+  // --- Chat sessions (sidebar list) ---
+  sessions(limit = 20): Promise<ChatSessionItem[]> {
+    return req(`/api/chat/sessions?limit=${limit}`)
+  },
+
+  renameSession(id: string, title: string): Promise<{ success: boolean; id: string; title: string }> {
+    return req(`/api/chat/sessions/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    })
+  },
+
+  deleteSession(id: string): Promise<{ success: boolean; id: string }> {
+    return req(`/api/chat/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  // --- Streaming chat (SSE). Calls onEvent for each parsed event. Returns
+  //     when the stream ends or aborts. Throws on HTTP error.
+  async chatStream(
+    body: { message: string; session_id: string },
+    onEvent: (e: ChatStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const res = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(body),
+      signal,
+    })
+    if (!res.ok || !res.body) {
+      let detail = `${res.status} ${res.statusText}`
+      try {
+        const j = await res.json()
+        if (j?.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const rawEvent = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        // Each SSE event is one or more "data: <line>" lines
+        const lines = rawEvent.split('\n').filter((l) => l.startsWith('data:'))
+        if (!lines.length) continue
+        const payload = lines.map((l) => l.slice(5).trimStart()).join('\n')
+        try {
+          onEvent(JSON.parse(payload) as ChatStreamEvent)
+        } catch {
+          // ignore malformed event
+        }
+      }
+    }
+  },
+
   // --- Approvals (HITL) ---
   approvals(sessionId: string): Promise<PendingApproval[]> {
     return req(`/api/approvals?session_id=${encodeURIComponent(sessionId)}`)
@@ -89,7 +155,16 @@ export const api = {
     const form = new FormData()
     form.append('file', file)
     const res = await fetch('/api/upload', { method: 'POST', body: form })
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`
+      try {
+        const body = await res.json()
+        if (body?.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+      } catch {
+        // ignore parse error
+      }
+      throw new Error(detail)
+    }
     return res.json()
   },
 
@@ -201,6 +276,14 @@ export const api = {
 
   settings(): Promise<AgentSettings> {
     return req('/api/settings')
+  },
+
+  ragSettings(): Promise<RagSettings> {
+    return req('/api/rag/settings')
+  },
+
+  updateRagSettings(patch: Partial<RagSettings>): Promise<RagSettings> {
+    return req('/api/rag/settings', { method: 'PATCH', body: JSON.stringify(patch) })
   },
 
   // --- News + Scheduler (Phase 8) ---

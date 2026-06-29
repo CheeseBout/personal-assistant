@@ -256,3 +256,32 @@ export interface DesktopObserveResult {
   error: string | null
   id?: string
 }
+
+// Chat session metadata (sidebar list)
+export interface ChatSessionItem {
+  id: string
+  title: string | null
+  created_at: string | null
+  updated_at: string | null
+  message_count: number
+  last_message_at: string | null
+}
+
+// RAG settings editable from the Settings panel
+export interface RagSettings {
+  threshold: number
+  min_results: number
+  max_results: number
+  use_rerank: boolean
+  citation_coverage_min: number
+  hybrid_candidates: number
+  rerank_threshold: number
+}
+
+// SSE events from POST /api/chat/stream
+export type ChatStreamEvent =
+  | { type: 'retrieval'; sources: Citation[] }
+  | { type: 'delta'; content: string }
+  | { type: 'verdict'; accepted: boolean; refusal?: boolean; grounding?: number; coverage?: unknown }
+  | { type: 'done'; session_id: string }
+  | { type: 'error'; message: string }
