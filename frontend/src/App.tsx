@@ -11,9 +11,10 @@ import { BrowserPanel } from './panels/BrowserPanel'
 import { GooglePanel } from './panels/GooglePanel'
 import { SandboxPanel } from './panels/SandboxPanel'
 import { NewsPanel } from './panels/NewsPanel'
+import { DesktopPanel } from './panels/DesktopPanel'
 import { SettingsPanel } from './panels/SettingsPanel'
 
-type View = 'chat' | 'documents' | 'timeline' | 'memory' | 'audit' | 'tools' | 'browser' | 'google' | 'sandbox' | 'news' | 'settings'
+type View = 'chat' | 'documents' | 'timeline' | 'memory' | 'audit' | 'tools' | 'browser' | 'google' | 'sandbox' | 'news' | 'desktop' | 'settings'
 
 const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'chat', label: 'Trò chuyện', icon: '💬' },
@@ -26,6 +27,7 @@ const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'google', label: 'Google', icon: '✉️' },
   { id: 'sandbox', label: 'Sandbox', icon: '🧪' },
   { id: 'news', label: 'Tin tức', icon: '📰' },
+  { id: 'desktop', label: 'Màn hình', icon: '🖥️' },
   { id: 'settings', label: 'Cài đặt', icon: '⚙️' },
 ]
 
@@ -150,6 +152,7 @@ export default function App() {
         )}
         {view === 'sandbox' && <SandboxPanel sessionId={sessionId} showToast={showToast} />}
         {view === 'news' && <NewsPanel showToast={showToast} />}
+        {view === 'desktop' && <DesktopPanel sessionId={sessionId} showToast={showToast} />}
         {view === 'settings' && <SettingsPanel sessionId={sessionId} />}
       </div>
 

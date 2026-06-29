@@ -319,6 +319,28 @@ class NewsReport(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+# Phase 9 - Desktop perception tables (read-only: see/read/summarize, never control)
+
+class DesktopObservation(Base):
+    """An on-demand desktop perception snapshot for the viewer.
+
+    Read-only by design (REQUIREMENTS §12.2 Desktop Perception): the agent may
+    capture, OCR, and summarize the screen but never clicks/types. OCR text is
+    masked for secrets before storage when masking is enabled.
+    """
+    __tablename__ = "desktop_observations"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, index=True)
+    active_window = Column(String)        # title of foreground window, if known
+    ocr_text = Column(Text)               # masked OCR text (may be truncated)
+    summary = Column(Text)                # optional model/heuristic summary
+    image_path = Column(String)           # local capture path (never sent unless vision opt-in)
+    masked = Column(Boolean, default=True)
+    ui_elements = Column(Text)            # JSON: accessibility tree elements (masked)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 def _migrate_schema():
     """Add columns introduced after the initial schema (lightweight, idempotent).
 

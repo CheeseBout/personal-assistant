@@ -35,6 +35,7 @@ from .sandbox_tools import (
 )
 from .memory_tools import memory_save, memory_search
 from .news_tools import web_search_tool, news_summarize_tool
+from .desktop_tools import desktop_observe, desktop_active_window, desktop_ui_elements, desktop_list_windows
 from ..core.logging_config import logger
 from ..core.redaction import redact_arguments
 
@@ -89,6 +90,10 @@ TOOL_EXECUTORS = {
     "memory.search": memory_search,
     "web.search": web_search_tool,
     "news.summarize": news_summarize_tool,
+    "desktop.observe": desktop_observe,
+    "desktop.active_window": desktop_active_window,
+    "desktop.ui_elements": desktop_ui_elements,
+    "desktop.list_windows": desktop_list_windows,
 }
 
 

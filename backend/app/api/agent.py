@@ -1,5 +1,6 @@
 """Agent and approval API endpoints."""
 
+import json
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -458,6 +459,63 @@ async def delete_scheduler_task(task_id: str) -> Dict[str, Any]:
     if result.get("status") != "success":
         raise HTTPException(status_code=404, detail=result.get("error", "Not found"))
     return result
+
+
+# --- Desktop perception (Phase 9): read-only screen perception ---
+
+@router.post("/desktop/observe")
+async def desktop_observe_now(request: dict) -> Dict[str, Any]:
+    """Capture + OCR + summarize the screen on demand (read-only).
+
+    Returns the observation. ``error`` is set (not raised) when capture deps are
+    unavailable so the UI can show a clear message instead of a 500.
+    """
+    session_id = request.get("session_id", "")
+    include_summary = bool(request.get("include_summary", True))
+    from ..services.desktop_perception import DesktopPerception
+    sync_db = next(get_sync_db())
+    try:
+        return DesktopPerception.get_instance().observe(
+            session_id=session_id, include_summary=include_summary, db=sync_db
+        )
+    finally:
+        sync_db.close()
+
+
+@router.get("/desktop/observations")
+async def desktop_observations(session_id: Optional[str] = None, limit: int = 30) -> Dict[str, Any]:
+    """List recent desktop observations (masked text only; images stay local)."""
+    from ..models.database import DesktopObservation
+    sync_db = next(get_sync_db())
+    try:
+        stmt = select(DesktopObservation)
+        if session_id:
+            stmt = stmt.where(DesktopObservation.session_id == session_id)
+        stmt = stmt.order_by(DesktopObservation.created_at.desc()).limit(limit)
+        rows = sync_db.execute(stmt).scalars().all()
+        items = [
+            {
+                "id": r.id,
+                "active_window": r.active_window,
+                "ocr_text": r.ocr_text,
+                "summary": r.summary,
+                "ui_elements": json.loads(r.ui_elements) if r.ui_elements else None,
+                "masked": bool(r.masked),
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+        return {"items": items, "count": len(items)}
+    finally:
+        sync_db.close()
+
+
+@router.get("/desktop/windows")
+async def desktop_windows() -> Dict[str, Any]:
+    """List all visible desktop windows (read-only)."""
+    from ..services.desktop_perception import _list_windows
+    windows = _list_windows()
+    return {"windows": windows, "count": len(windows)}
 
 
 @router.get("/settings")

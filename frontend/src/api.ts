@@ -5,6 +5,9 @@ import type {
   AuditItem,
   BrowserState,
   ChatMessage,
+  DesktopObservation,
+  DesktopObserveResult,
+  DesktopWindow,
   DocumentItem,
   EventItem,
   GoogleActionItem,
@@ -236,5 +239,21 @@ export const api = {
 
   deleteSchedulerTask(id: string): Promise<Record<string, unknown>> {
     return req(`/api/scheduler/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  // --- Desktop perception (Phase 9): read-only ---
+  desktopObserve(sessionId: string, includeSummary = true): Promise<DesktopObserveResult> {
+    return req('/api/desktop/observe', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, include_summary: includeSummary }),
+    })
+  },
+
+  desktopObservations(sessionId: string, limit = 30): Promise<{ items: DesktopObservation[]; count: number }> {
+    return req(`/api/desktop/observations?session_id=${encodeURIComponent(sessionId)}&limit=${limit}`)
+  },
+
+  desktopWindows(): Promise<{ windows: DesktopWindow[]; count: number }> {
+    return req('/api/desktop/windows')
   },
 }

@@ -23,5 +23,10 @@ google-auth-oauthlib==1.2.1
 psutil==5.9.8
 apscheduler==3.10.4
 ddgs==9.0.0
+mss==9.0.1
+Pillow==10.4.0
+pytesseract==0.3.13
+pygetwindow==0.0.9
+pywinauto==0.6.8
 pytest==7.4.4
 

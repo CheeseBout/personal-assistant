@@ -116,6 +116,15 @@ class Settings(BaseSettings):
     SCHEDULER_MIN_INTERVAL_S: int = 300            # floor for interval jobs (avoid runaway)
     NEWS_DEFAULT_MAX_SOURCES: int = 5
 
+    # Phase 9 - Desktop perception (read-only: see/read/summarize, never control)
+    DESKTOP_CAPTURE_DIR: str = "../data/desktop/captures"
+    DESKTOP_ENABLE_OCR: bool = True                # requires pytesseract + Tesseract binary
+    DESKTOP_ENABLE_VISION: bool = False            # send screenshot to vision model (privacy: opt-in)
+    DESKTOP_MASK_SENSITIVE: bool = True            # redact secret-shaped text from OCR output
+    DESKTOP_OCR_MAX_CHARS: int = 8000              # cap OCR text fed to model/stored
+    DESKTOP_A11Y_MAX_ELEMENTS: int = 80            # max UI elements from accessibility tree
+    DESKTOP_MONITOR_INTERVAL_S: int = 60           # periodic monitor interval (min 30)
+
     # CORS - local-first allowlist (avoid "*" with credentials)
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",

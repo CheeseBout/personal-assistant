@@ -218,3 +218,40 @@ export interface ScheduledTask {
   last_status: string | null
   created_at: string | null
 }
+
+export interface UiElement {
+  type: string
+  name: string
+  auto_id: string
+  rect: { left: number; top: number; right: number; bottom: number } | null
+  enabled: boolean
+}
+
+export interface DesktopWindow {
+  title: string
+  visible: boolean
+  minimized: boolean
+  maximized: boolean
+  active: boolean
+}
+
+export interface DesktopObservation {
+  id: string
+  active_window: string | null
+  ocr_text: string | null
+  summary: string | null
+  ui_elements: UiElement[] | null
+  masked: boolean
+  created_at: string | null
+}
+
+export interface DesktopObserveResult {
+  status: string
+  active_window: string | null
+  ocr_text: string | null
+  ui_elements: UiElement[] | null
+  summary: string | null
+  masked: boolean
+  error: string | null
+  id?: string
+}

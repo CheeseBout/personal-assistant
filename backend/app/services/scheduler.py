@@ -26,7 +26,7 @@ from ..core.logging_config import logger
 from .news_service import generate_report
 
 # Only these task kinds may be scheduled to run automatically.
-SAFE_KINDS = {"news_summary"}
+SAFE_KINDS = {"news_summary", "desktop_monitor"}
 
 
 def _parse_schedule(schedule: str) -> Dict[str, Any]:
@@ -164,6 +164,8 @@ class SchedulerManager:
                         db=db,
                     )
                     status = "success" if result.get("status") == "success" else result.get("status", "error")
+                elif task.kind == "desktop_monitor":
+                    status = self._run_desktop_monitor(task, db)
             except Exception as e:
                 logger.error(f"Scheduled task {task_id} failed: {e}")
                 status = "error"
@@ -196,9 +198,31 @@ class SchedulerManager:
                 db.add(task)
                 db.commit()
                 return result
+            if task.kind == "desktop_monitor":
+                status = self._run_desktop_monitor(task, db)
+                return {"status": status}
             return {"status": "error", "error": f"Unknown task kind: {task.kind}"}
         finally:
             db.close()
+
+    _last_observed_window: Optional[str] = None
+
+    def _run_desktop_monitor(self, task, db) -> str:
+        """Periodic desktop observation — skip if the active window hasn't changed."""
+        from .desktop_perception import DesktopPerception, _active_window_title
+
+        current_window = _active_window_title()
+        if current_window and current_window == self._last_observed_window:
+            logger.debug("desktop_monitor: window unchanged, skipping")
+            return "skipped"
+
+        self._last_observed_window = current_window
+        result = DesktopPerception.get_instance().observe(
+            session_id=f"scheduled:{task.id}",
+            include_summary=True,
+            db=db,
+        )
+        return "success" if result.get("status") == "success" else result.get("status", "error")
 
     # ---- CRUD ----
 

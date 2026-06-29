@@ -80,7 +80,6 @@ class LLMProvider:
         tools: List[Dict] = None,
         temperature: float = 0.7
     ) -> LLMResponse:
-        """Call LLM with messages and optional context"""
         formatted_messages = []
 
         if context:
@@ -135,3 +134,21 @@ Rules:
         except Exception as e:
             print(f"LLM API error: {e}")
             raise
+
+    def vision(self, image_b64: str, prompt: str, temperature: float = 0.2) -> str:
+        """Summarize/describe an image (e.g. a screenshot) via a vision-capable model.
+
+        Synchronous to match the desktop perception service. ``image_b64`` is a
+        base64-encoded PNG. Returns the model's text. Raises on API error so the
+        caller can fall back to OCR-only summaries.
+        """
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+        ]
+        response = self._get_sync_client().chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": content}],
+            temperature=temperature,
+        )
+        return response.choices[0].message.content or ""
