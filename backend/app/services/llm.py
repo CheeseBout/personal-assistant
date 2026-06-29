@@ -1,6 +1,6 @@
-﻿import os
+import os
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, AsyncIterator
 
 from pydantic import BaseModel
 
@@ -80,22 +80,20 @@ class LLMProvider:
         tools: List[Dict] = None,
         temperature: float = 0.7
     ) -> LLMResponse:
+        """Asynchronous LLM call.
+
+        If ``context`` is provided, it is wrapped in the canonical RAG system
+        prompt (see services.prompts.build_rag_system_prompt) and prepended.
+        Callers that already build their own system message should pass
+        ``context=None`` to avoid duplicating system instructions.
+        """
         formatted_messages = []
 
         if context:
+            from .prompts import build_rag_system_prompt
             formatted_messages.append({
                 "role": "system",
-                "content": f"""You are a helpful assistant. Use the following context from documents to answer questions.
-
-Context:
-{context}
-
-Rules:
-1. Answer based on the provided context.
-2. If the context doesn't contain relevant information, say "KhÃ´ng tÃ¬m tháº¥y tÃ i liá»‡u phÃ¹ há»£p."
-3. Cite sources using format: [filename] or [filename, chunk X]
-4. Do not make up information outside the context.
-5. Answer in the same language as the question."""
+                "content": build_rag_system_prompt(context),
             })
 
         for msg in messages:
@@ -134,6 +132,47 @@ Rules:
         except Exception as e:
             print(f"LLM API error: {e}")
             raise
+
+    async def chat_async_stream(
+        self,
+        messages: List[Dict],
+        context: str = None,
+        temperature: float = 0.7,
+    ) -> AsyncIterator[str]:
+        """Stream text chunks from the LLM (no tool-calling).
+
+        Used by /api/chat/stream for token-by-token chat responses. Tools are
+        intentionally not supported here — streaming chat is for RAG-only
+        answers; tool-calling goes through the non-streaming /api/agent path.
+        """
+        formatted_messages = []
+
+        if context:
+            from .prompts import build_rag_system_prompt
+            formatted_messages.append({
+                "role": "system",
+                "content": build_rag_system_prompt(context),
+            })
+
+        for msg in messages:
+            formatted_messages.append({
+                "role": msg["role"],
+                "content": msg["content"],
+            })
+
+        stream = await self._get_async_client().chat.completions.create(
+            model=self.model,
+            messages=formatted_messages,
+            temperature=temperature,
+            stream=True,
+        )
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            piece = getattr(delta, "content", None)
+            if piece:
+                yield piece
 
     def vision(self, image_b64: str, prompt: str, temperature: float = 0.2) -> str:
         """Summarize/describe an image (e.g. a screenshot) via a vision-capable model.

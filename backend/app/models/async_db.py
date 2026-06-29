@@ -23,6 +23,8 @@ from .database import (  # noqa: F401
     BrowserAction,
     GmailAction,
     GoogleWorkspaceAction,
+    ChatSession,
+    AppSetting,
 )
 
 
@@ -66,12 +68,16 @@ async def init_async_db():
 
 
 async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
-    """Dependency for FastAPI - returns an async session or a sync fallback."""
+    """Dependency for FastAPI - returns an async session or a sync fallback.
+
+    The dependency does NOT auto-commit on exit; each endpoint must commit
+    explicitly when its writes are complete. This avoids double-commits and
+    keeps transaction boundaries visible at the call site.
+    """
     if AsyncSessionLocal is None:
         session = SyncAsyncSessionAdapter()
         try:
             yield session
-            await session.commit()
         except Exception:
             await session.rollback()
             raise
@@ -82,7 +88,6 @@ async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
         except Exception:
             await session.rollback()
             raise

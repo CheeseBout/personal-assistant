@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 from .embedding import EmbeddingService, VectorStore
@@ -8,10 +9,16 @@ from .document import DocumentParser, Chunker
 from ..core.logging_config import logger
 
 
+# Two-worker pool dedicated to running vector and keyword search in parallel.
+# Both call paths are blocking I/O / native code, so a thread pool gives a
+# real speedup. Module-level so it lives for the process lifetime.
+_search_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rag-search")
+
+
 class RAGEngine:
     def __init__(self):
         self.embedding_service = EmbeddingService()
-        self.vector_store = VectorStore()
+        self.vector_store = VectorStore(embedding_service=self.embedding_service)
         self.keyword_index = KeywordIndex()
         self.chunker = Chunker()
 
@@ -80,16 +87,36 @@ class RAGEngine:
         return fused
 
     def hybrid_search(self, query: str, candidates: int = None) -> List[Dict]:
-        """Vector + keyword retrieval fused with RRF, then cross-encoder rerank."""
-        from ..core.config import settings
-        if candidates is None:
-            candidates = settings.HYBRID_CANDIDATES
+        """Vector + keyword retrieval fused with RRF, then cross-encoder rerank.
 
-        vector = self._vector_search(query, candidates)
-        keyword = self._keyword_search(query, candidates)
+        Vector and keyword searches run in parallel via a small thread pool —
+        both are blocking calls (numpy / native sqlite) so threads give a real
+        speedup. The reranker stays serial since it usually dominates wall
+        time and benefits less from concurrency at this scale.
+        """
+        from ..core.config import settings
+        from .settings_manager import SettingsManager
+        rag_cfg = SettingsManager.get_instance().get_rag_settings()
+        if candidates is None:
+            candidates = rag_cfg.get("hybrid_candidates", settings.HYBRID_CANDIDATES)
+        use_rerank = rag_cfg.get("use_rerank", settings.USE_RERANK)
+
+        vec_future = _search_pool.submit(self._vector_search, query, candidates)
+        kw_future = _search_pool.submit(self._keyword_search, query, candidates)
+        try:
+            vector = vec_future.result()
+        except Exception as e:
+            logger.error(f"Vector search failed: {e}")
+            vector = []
+        try:
+            keyword = kw_future.result()
+        except Exception as e:
+            logger.error(f"Keyword search failed: {e}")
+            keyword = []
+
         fused = self._rrf_fuse(vector, keyword, settings.RRF_K)
 
-        if settings.USE_RERANK:
+        if use_rerank:
             fused = get_reranker().rerank(query, fused)
         else:
             for c in fused:
@@ -152,11 +179,16 @@ class RAGEngine:
     ) -> Optional[Dict]:
         """Hybrid retrieve → rerank → threshold filter → format citations."""
         from ..core.config import settings
+        from .settings_manager import SettingsManager
+        # Pull effective overrides so runtime PATCH /api/rag/settings is respected
+        # without restarting the server.
+        rag_cfg = SettingsManager.get_instance().get_rag_settings()
 
         if threshold is None:
-            threshold = settings.RERANK_THRESHOLD
+            threshold = rag_cfg.get("rerank_threshold", settings.RERANK_THRESHOLD)
         if min_results is None:
-            min_results = settings.RAG_MIN_RESULTS
+            min_results = rag_cfg.get("min_results", settings.RAG_MIN_RESULTS)
+        max_results = rag_cfg.get("max_results", settings.RAG_MAX_RESULTS)
 
         results = self.hybrid_search(query)
         if not results:
@@ -185,7 +217,7 @@ class RAGEngine:
             logger.debug(f"Insufficient results after threshold: {len(filtered)} < {min_results}")
             return None
 
-        top_results = filtered[:settings.RAG_MAX_RESULTS]
+        top_results = filtered[:max_results]
 
         context_parts = []
         sources = []

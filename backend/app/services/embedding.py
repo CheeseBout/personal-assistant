@@ -1,5 +1,7 @@
 ﻿import os
-from typing import List, Dict
+from typing import List, Dict, Optional
+
+from ..core.logging_config import logger
 
 
 class EmbeddingService:
@@ -12,10 +14,10 @@ class EmbeddingService:
                 "Install backend/requirements.txt before uploading documents."
             ) from exc
 
-        print(f"Loading embedding model: {model_name}...")
+        logger.info(f"Loading embedding model: {model_name}...")
         self.model = SentenceTransformer(model_name)
         self.embedding_dim = self.model.get_sentence_embedding_dimension()
-        print(f"Model loaded. Embedding dimension: {self.embedding_dim}")
+        logger.info(f"Embedding model loaded. Dimension: {self.embedding_dim}")
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for list of texts."""
@@ -30,7 +32,13 @@ class EmbeddingService:
 
 
 class VectorStore:
-    def __init__(self, persist_dir: str = None):
+    def __init__(self, persist_dir: str = None, embedding_service: Optional[EmbeddingService] = None):
+        """Vector store backed by ChromaDB.
+
+        ``embedding_service`` MUST be the same instance used for indexing.
+        Otherwise query-time and index-time embeddings come from different
+        models and retrieval quality collapses silently.
+        """
         try:
             import chromadb
         except ModuleNotFoundError as exc:
@@ -43,9 +51,10 @@ class VectorStore:
             persist_dir = settings.VECTOR_STORE_PATH
         os.makedirs(persist_dir, exist_ok=True)
         self.persist_dir = persist_dir
+        self.embedding_service = embedding_service
         self.client = chromadb.PersistentClient(path=persist_dir)
         self.collection = self.client.get_or_create_collection("documents")
-        print(f"Vector store initialized at: {persist_dir}")
+        logger.info(f"Vector store initialized at: {persist_dir}")
 
     def add_documents(self, doc_id: str, chunks: List[Dict], embeddings: List[List[float]], version: int = 1):
         """Add document chunks to vector store."""
@@ -74,15 +83,27 @@ class VectorStore:
             documents=texts,
             metadatas=metadatas
         )
-        print(f"Added {len(chunks)} chunks to vector store for doc {doc_id} v{version}")
+        logger.info(f"Added {len(chunks)} chunks to vector store for doc {doc_id} v{version}")
 
     def search(self, query: str, n_results: int = 5, where: Dict = None) -> List[Dict]:
-        """Search similar chunks, optionally filtered by metadata."""
+        """Search similar chunks, optionally filtered by metadata.
+
+        Embeds the query with the SAME EmbeddingService used at index time, so
+        index- and query-side embeddings come from the same model.
+        """
         if self.collection.count() == 0:
             return []
 
+        if self.embedding_service is None:
+            raise RuntimeError(
+                "VectorStore.search requires an embedding_service; "
+                "construct VectorStore(embedding_service=...) so query and index "
+                "embeddings come from the same model."
+            )
+        query_embedding = self.embedding_service.embed_single(query)
+
         results = self.collection.query(
-            query_texts=[query],
+            query_embeddings=[query_embedding],
             n_results=min(n_results, self.collection.count()),
             where=where or None,
         )
@@ -108,9 +129,9 @@ class VectorStore:
         results = self.collection.get(where={"doc_id": doc_id})
         if results['ids']:
             self.collection.delete(ids=results['ids'])
-            print(f"Deleted {len(results['ids'])} chunks for doc {doc_id}")
+            logger.info(f"Deleted {len(results['ids'])} chunks for doc {doc_id}")
 
     def clear_all(self):
         """Clear all documents from collection."""
         self.collection.delete(where={})
-        print("Cleared all documents from vector store")
+        logger.info("Cleared all documents from vector store")

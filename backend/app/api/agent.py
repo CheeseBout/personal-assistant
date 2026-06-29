@@ -103,10 +103,10 @@ async def agent_chat(
 def _confirmation_prompt(intent: str) -> str:
     if intent == "agent_action":
         return (
-            "Toi hieu ban muon thuc hien mot hanh dong qua cong cu "
-            "(tao/sua/xoa file hoac thao tac workspace). Ban xac nhan tiep tuc?"
+            "Tôi hiểu bạn muốn thực hiện một hành động qua công cụ "
+            "(tạo/sửa/xóa file hoặc thao tác workspace). Bạn xác nhận tiếp tục?"
         )
-    return "Toi chua chac chan ve y dinh cua ban. Ban xac nhan tiep tuc xu ly yeu cau nay?"
+    return "Tôi chưa chắc chắn về ý định của bạn. Bạn xác nhận tiếp tục xử lý yêu cầu này?"
 
 
 @router.get("/approvals")
