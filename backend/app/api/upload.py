@@ -7,19 +7,31 @@ import uuid
 
 from ..models.async_db import get_async_db, Document, DocumentVersion, Chunk, DocumentMetadata, AuditLog
 from ..services.document import DocumentParser, Chunker
-from ..services.rag import RAGEngine
+from ..services.rag_singleton import get_rag_engine
 from ..core.config import settings
 from ..core.logging_config import logger
 
 router = APIRouter(prefix="/api", tags=["documents"])
-_rag_engine: Optional[RAGEngine] = None
 
 
-def get_rag_engine() -> RAGEngine:
-    global _rag_engine
-    if _rag_engine is None:
-        _rag_engine = RAGEngine()
-    return _rag_engine
+def _matches_magic(ext: str, content: bytes) -> bool:
+    """Check that the file's leading bytes match what the extension claims.
+
+    Catches the simplest case of someone uploading malware renamed as .pdf.
+    Plain-text formats (.txt, .md) are accepted as-is — no reliable signature.
+    """
+    if not content:
+        return False
+    if ext == ".pdf":
+        return content[:5] == b"%PDF-"
+    if ext in (".docx", ".xlsx"):
+        # Both are zip-based OPC containers
+        return content[:4] == b"PK\x03\x04"
+    if ext in (".txt", ".md"):
+        # No signature — best we can do is reject obvious binaries (NUL bytes
+        # are very rare in legitimate text files).
+        return b"\x00" not in content[:512]
+    return True
 
 
 async def _index_new_version(
@@ -72,14 +84,27 @@ async def upload_file(
     allowed_extensions = ['.txt', '.pdf', '.md', '.docx', '.xlsx']
     file_ext = Path(file.filename).suffix.lower()
     if file_ext not in allowed_extensions:
-        return {"success": False, "error": f"File type not supported. Allowed: {', '.join(allowed_extensions)}"}
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type not supported. Allowed: {', '.join(allowed_extensions)}",
+        )
 
     try:
         content = await file.read()
-        if len(content) > settings.MAX_FILE_SIZE:
-            return {"success": False, "error": f"File too large. Maximum size is {settings.MAX_FILE_SIZE // (1024*1024)}MB"}
     except Exception as e:
-        return {"success": False, "error": f"Failed to read file: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
+
+    if len(content) > settings.MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is {settings.MAX_FILE_SIZE // (1024 * 1024)}MB",
+        )
+
+    if not _matches_magic(file_ext, content):
+        raise HTTPException(
+            status_code=400,
+            detail=f"File content does not match its {file_ext} extension",
+        )
 
     # Check for an existing active document with the same filename (versioning)
     existing_stmt = select(Document).where(Document.filename == file.filename, Document.is_active == True)
@@ -110,7 +135,7 @@ async def upload_file(
             f.write(content)
         file_hash = Chunker.calculate_file_hash(str(file_path))
     except Exception as e:
-        return {"success": False, "error": f"Failed to save file: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
 
     doc = Document(
         id=doc_id,
@@ -149,7 +174,7 @@ async def upload_file(
         if file_path.exists():
             file_path.unlink()
         logger.error(f"Upload failed: {e}")
-        return {"success": False, "error": f"Upload failed: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
 
 
 async def _create_new_version(
@@ -171,7 +196,7 @@ async def _create_new_version(
         with open(file_path, "wb") as f:
             f.write(content)
     except Exception as e:
-        return {"success": False, "error": f"Failed to save file: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
 
     try:
         # Remove previous version vectors/keywords from active retrieval
@@ -197,12 +222,17 @@ async def _create_new_version(
             "version": new_version, "new_version": True,
             "chunk_count": result["chunk_count"], "total_chars": result["total_chars"],
         }
+    except HTTPException:
+        await db.rollback()
+        if file_path.exists():
+            file_path.unlink()
+        raise
     except Exception as e:
         await db.rollback()
         if file_path.exists():
             file_path.unlink()
         logger.error(f"Re-index (new version) failed: {e}")
-        return {"success": False, "error": f"Re-index failed: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Re-index failed: {e}")
 
 
 @router.post("/documents/{doc_id}/reindex")
@@ -210,11 +240,11 @@ async def reindex_document(doc_id: str, db: AsyncSession = Depends(get_async_db)
     """Re-index a document if its file on disk changed (hash mismatch → new version)."""
     doc = (await db.execute(select(Document).where(Document.id == doc_id))).scalar_one_or_none()
     if not doc:
-        return {"success": False, "error": "Document not found"}
+        raise HTTPException(status_code=404, detail="Document not found")
 
     file_path = Path(doc.file_path)
     if not file_path.exists():
-        return {"success": False, "error": "Underlying file no longer exists on disk"}
+        raise HTTPException(status_code=410, detail="Underlying file no longer exists on disk")
 
     current_hash = Chunker.calculate_file_hash(str(file_path))
     if current_hash == doc.file_hash:
@@ -246,7 +276,7 @@ async def delete_document(doc_id: str, db: AsyncSession = Depends(get_async_db))
     """Delete a document and all of its derived data, then verify removal."""
     doc = (await db.execute(select(Document).where(Document.id == doc_id))).scalar_one_or_none()
     if not doc:
-        return {"success": False, "error": "Document not found"}
+        raise HTTPException(status_code=404, detail="Document not found")
 
     try:
         engine = get_rag_engine()
@@ -281,7 +311,10 @@ async def delete_document(doc_id: str, db: AsyncSession = Depends(get_async_db))
             "embeddings_remaining": vec_remaining,
             "keyword_entries_remaining": kw_remaining,
         }
+    except HTTPException:
+        await db.rollback()
+        raise
     except Exception as e:
         await db.rollback()
         logger.error(f"Delete document failed: {e}")
-        return {"success": False, "error": f"Failed to delete document: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {e}")

@@ -1,19 +1,16 @@
-from fastapi import APIRouter
-from typing import Dict, Any, Optional
+from fastapi import APIRouter, HTTPException
+from typing import Dict, Any
 import time
 
-from ..services.rag import RAGEngine
+from ..services.rag_singleton import get_rag_engine
 from ..core.config import settings
 
 router = APIRouter(prefix="/api/debug", tags=["debug"])
-_rag_engine: Optional[RAGEngine] = None
 
 
-def get_rag_engine() -> RAGEngine:
-    global _rag_engine
-    if _rag_engine is None:
-        _rag_engine = RAGEngine()
-    return _rag_engine
+def _require_debug_enabled() -> None:
+    if not settings.DEBUG_ENDPOINTS_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug endpoints are disabled")
 
 
 @router.get("/retrieve")
@@ -22,6 +19,7 @@ async def debug_retrieve(
     n_results: int = 10,
 ) -> Dict[str, Any]:
     """Debug: expose vector / keyword / fusion / rerank stages for a query."""
+    _require_debug_enabled()
     if not q:
         return {"error": "Query parameter 'q' is required"}
 
@@ -64,6 +62,7 @@ async def debug_retrieve(
 @router.get("/settings")
 async def debug_settings() -> Dict[str, Any]:
     """Expose effective Phase 2 RAG settings."""
+    _require_debug_enabled()
     return {
         "hybrid_candidates": settings.HYBRID_CANDIDATES,
         "rrf_k": settings.RRF_K,

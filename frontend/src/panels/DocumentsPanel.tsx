@@ -30,19 +30,28 @@ export function DocumentsPanel({ showToast }: Props) {
   }, [load])
 
   const upload = async (file: File) => {
-    setUploading(true)
     try {
       const res = await api.upload(file)
-      if (res.success === false) {
-        showToast(`Tải lên thất bại: ${res.error}`)
-      } else if (res.unchanged) {
-        showToast('File không thay đổi, bỏ qua re-index.')
+      if (res.unchanged) {
+        showToast(`${file.name}: không thay đổi.`)
       } else {
         showToast(`Đã xử lý ${file.name} (${res.chunk_count ?? '?'} chunks)`)
       }
-      await load()
     } catch (e) {
-      showToast(`Lỗi tải lên: ${(e as Error).message}`)
+      showToast(`Lỗi tải lên ${file.name}: ${(e as Error).message}`)
+    }
+  }
+
+  // Upload one or more files sequentially. Sequential keeps UI feedback clear
+  // and avoids hammering the indexer with concurrent embed calls.
+  const uploadMany = async (files: File[]) => {
+    if (!files.length) return
+    setUploading(true)
+    try {
+      for (const f of files) {
+        await upload(f)
+      }
+      await load()
     } finally {
       setUploading(false)
     }
@@ -51,8 +60,8 @@ export function DocumentsPanel({ showToast }: Props) {
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setDrag(false)
-    const f = e.dataTransfer.files?.[0]
-    if (f) upload(f)
+    const files = Array.from(e.dataTransfer.files || [])
+    if (files.length) uploadMany(files)
   }
 
   const remove = async (doc: DocumentItem) => {
@@ -60,8 +69,7 @@ export function DocumentsPanel({ showToast }: Props) {
     setBusyId(doc.id)
     try {
       const res = await api.deleteDocument(doc.id)
-      if (res.success === false) showToast(`Xoá thất bại: ${res.error}`)
-      else showToast(res.verified ? 'Đã xoá và xác minh embedding sạch.' : 'Đã xoá (chưa xác minh được embedding).')
+      showToast(res.verified ? 'Đã xoá và xác minh embedding sạch.' : 'Đã xoá (chưa xác minh được embedding).')
       await load()
     } catch (e) {
       showToast(`Lỗi xoá: ${(e as Error).message}`)
@@ -74,8 +82,7 @@ export function DocumentsPanel({ showToast }: Props) {
     setBusyId(doc.id)
     try {
       const res = await api.reindexDocument(doc.id)
-      if (res.success === false) showToast(`Re-index thất bại: ${res.error}`)
-      else if (res.unchanged) showToast('File chưa thay đổi.')
+      if (res.unchanged) showToast('File chưa thay đổi.')
       else showToast(`Đã tạo version ${res.version}.`)
       await load()
     } catch (e) {
@@ -110,10 +117,11 @@ export function DocumentsPanel({ showToast }: Props) {
           ref={fileRef}
           type="file"
           accept=".txt,.pdf,.md,.docx,.xlsx"
+          multiple
           style={{ display: 'none' }}
           onChange={(e) => {
-            const f = e.target.files?.[0]
-            if (f) upload(f)
+            const files = Array.from(e.target.files || [])
+            if (files.length) uploadMany(files)
             e.target.value = ''
           }}
         />

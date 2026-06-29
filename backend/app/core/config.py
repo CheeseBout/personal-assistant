@@ -168,6 +168,9 @@ class Settings(BaseSettings):
         "null",
     ]
 
+    # Misc / safety
+    DEBUG_ENDPOINTS_ENABLED: bool = True   # disable to hide /api/debug/* in prod-like deploys
+
     class Config:
         env_file = ".env"
         case_sensitive = True
