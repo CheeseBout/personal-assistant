@@ -13,6 +13,36 @@ def _normalize(text: str) -> str:
     return re.sub(r'\s+', ' ', text.lower()).strip()
 
 
+# Citation markers the model appends, e.g. "[product_specs, chunk 1]" or
+# "[filename]". Stripped before grounding so the model's own source tags (which
+# never appear in the evidence text) don't count as unsupported tokens.
+_CITATION_MARKER = re.compile(r"\[[^\]]*\]")
+
+
+def _content_tokens(text: str) -> set:
+    """Tokenize for grounding: split numbers from words, keep numeric tokens.
+
+    Three deliberate choices, each fixing a real miss in plain ``\\w+`` overlap:
+    - Citation markers ([...]) are removed first, so "[product_specs, chunk 1]"
+      doesn't inject tokens that are never in the evidence.
+    - Digit runs are split from letter runs ("100W" -> "100","w"; "24-month" ->
+      "24","month") so number-unit combos match consistently.
+    - Numbers are kept regardless of length, while alphabetic tokens still drop
+      below 3 chars. Numeric facts ("12 ngày", "24 months", "75 Wh") are exactly
+      what a RAG answer must ground, and the old length>2 filter silently
+      discarded every 1-2 digit number.
+    """
+    cleaned = _CITATION_MARKER.sub(" ", text.lower())
+    # \d+ pulls digit runs; [^\W\d_]+ pulls letter runs (Unicode-aware → VN ok).
+    raw = re.findall(r"\d+|[^\W\d_]+", cleaned)
+    tokens = set()
+    for t in raw:
+        if t.isdigit() or len(t) > 2:
+            tokens.add(t)
+    return tokens
+
+
+
 def citation_coverage(answer: str, sources: List[Dict]) -> Dict:
     """Check how many distinct source files are explicitly referenced in the answer.
 
@@ -48,17 +78,17 @@ def grounding_score(answer: str, chunks: List[Dict]) -> float:
     """Token-overlap proxy for how much of the answer is supported by evidence.
 
     Returns the fraction of answer content-tokens that also appear somewhere in
-    the retrieved chunk texts. Cheap stand-in for an NLI verifier; good enough to
-    catch fully hallucinated answers.
+    the retrieved chunk texts. Numeric tokens are kept and number-unit combos
+    are split (see ``_content_tokens``) so factual numeric answers are scored
+    fairly. Cheap stand-in for an NLI verifier; good enough to catch fully
+    hallucinated answers.
     """
-    ans_tokens = set(re.findall(r'\w+', answer.lower()))
-    # Drop very short tokens (stopword-ish) to reduce noise
-    ans_tokens = {t for t in ans_tokens if len(t) > 2}
+    ans_tokens = _content_tokens(answer)
     if not ans_tokens:
         return 0.0
 
-    evidence = " ".join(c.get("content", "") for c in chunks).lower()
-    evidence_tokens = set(re.findall(r'\w+', evidence))
+    evidence = " ".join(c.get("content", "") for c in chunks)
+    evidence_tokens = _content_tokens(evidence)
     if not evidence_tokens:
         return 0.0
 
