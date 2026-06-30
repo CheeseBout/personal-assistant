@@ -67,6 +67,21 @@ export interface DocumentItem {
   current_version: number
 }
 
+export interface DocumentVersionInfo {
+  version: number
+  chunk_count: number | null
+  created_at: string | null
+  is_current: boolean
+  file_exists: boolean
+}
+
+export interface DocumentVersionsResult {
+  doc_id: string
+  filename: string
+  current_version: number
+  versions: DocumentVersionInfo[]
+}
+
 export interface EventItem {
   id: string
   session_id: string

@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState, useCallback } from 'react'
 import { api } from '../api'
-import type { AgentResponse, ChatMessage, ChatStreamEvent, Citation } from '../types'
+import type { AgentResponse, ChatMessage, ChatStreamEvent, Citation, DocumentItem } from '../types'
 import { riskBadge } from './util'
 import { Markdown } from '../components/Markdown'
 
@@ -42,6 +42,8 @@ export function ChatPanel({ sessionId, onApprovalChange, onSessionsChange, showT
   const [streamVerdict, setStreamVerdict] = useState<null | { accepted: boolean; grounding?: number }>(null)
   const [intentPrompt, setIntentPrompt] = useState<IntentPrompt | null>(null)
   const [approvalPrompt, setApprovalPrompt] = useState<ApprovalPrompt | null>(null)
+  const [docs, setDocs] = useState<DocumentItem[]>([])
+  const [scope, setScope] = useState<string>('all') // 'all' or a doc_id
   const scrollRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
   // Track latest messages for callbacks that would otherwise capture stale state.
@@ -49,6 +51,22 @@ export function ChatPanel({ sessionId, onApprovalChange, onSessionsChange, showT
   messagesRef.current = messages
   // Whether the user is currently parked near the bottom — only auto-scroll then.
   const stickToBottomRef = useRef(true)
+
+  // Load the document list once so the user can scope questions to one file.
+  useEffect(() => {
+    let cancelled = false
+    api
+      .documents()
+      .then((d) => {
+        if (!cancelled) setDocs(d)
+      })
+      .catch(() => {
+        if (!cancelled) setDocs([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Load history when session changes.
   useEffect(() => {
@@ -161,8 +179,9 @@ export function ChatPanel({ sessionId, onApprovalChange, onSessionsChange, showT
     let citations: Citation[] = []
     let verdict: { accepted: boolean; grounding?: number } | null = null
     let gotAnyDelta = false
+    const docIds = scope === 'all' ? undefined : [scope]
     try {
-      await api.chatStream({ message: text, session_id: sessionId }, (e: ChatStreamEvent) => {
+      await api.chatStream({ message: text, session_id: sessionId, doc_ids: docIds }, (e: ChatStreamEvent) => {
         if (e.type === 'retrieval') {
           citations = e.sources || []
           setStreamingCitations(citations)
@@ -396,6 +415,22 @@ export function ChatPanel({ sessionId, onApprovalChange, onSessionsChange, showT
 
       <div className="composer">
         <div className="composer-inner">
+          {docs.length > 0 && (
+            <select
+              className="scope-select"
+              value={scope}
+              disabled={busy}
+              onChange={(e) => setScope(e.target.value)}
+              title="Phạm vi tìm kiếm tài liệu"
+            >
+              <option value="all">Toàn bộ tài liệu</option>
+              {docs.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.filename}
+                </option>
+              ))}
+            </select>
+          )}
           <textarea
             ref={taRef}
             value={input}

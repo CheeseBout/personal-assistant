@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import type { DocumentItem } from '../types'
+import type { DocumentItem, DocumentVersionInfo } from '../types'
 import { fmtBytes, fmtDateTime } from './util'
 
 interface Props {
@@ -13,6 +13,8 @@ export function DocumentsPanel({ showToast }: Props) {
   const [uploading, setUploading] = useState(false)
   const [drag, setDrag] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [versionsFor, setVersionsFor] = useState<string | null>(null)
+  const [versions, setVersions] = useState<DocumentVersionInfo[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -92,6 +94,24 @@ export function DocumentsPanel({ showToast }: Props) {
     }
   }
 
+  const toggleVersions = async (doc: DocumentItem) => {
+    if (versionsFor === doc.id) {
+      setVersionsFor(null)
+      setVersions([])
+      return
+    }
+    setBusyId(doc.id)
+    try {
+      const res = await api.documentVersions(doc.id)
+      setVersions(res.versions)
+      setVersionsFor(doc.id)
+    } catch (e) {
+      showToast(`Lỗi tải lịch sử version: ${(e as Error).message}`)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   return (
     <div className="panel-body">
       <div
@@ -135,7 +155,8 @@ export function DocumentsPanel({ showToast }: Props) {
         <div className="empty">Chưa có tài liệu nào.</div>
       ) : (
         docs.map((d) => (
-          <div className="list-row" key={d.id}>
+          <div key={d.id}>
+          <div className="list-row">
             <span className="nav-icon">📄</span>
             <div className="grow">
               <div className="name">{d.filename}</div>
@@ -143,12 +164,30 @@ export function DocumentsPanel({ showToast }: Props) {
                 {fmtBytes(d.file_size)} · v{d.current_version} · {fmtDateTime(d.uploaded_at)}
               </div>
             </div>
+            <button className="btn btn-sm" disabled={busyId === d.id} onClick={() => toggleVersions(d)}>
+              {versionsFor === d.id ? 'Ẩn' : 'Versions'}
+            </button>
             <button className="btn btn-sm" disabled={busyId === d.id} onClick={() => reindex(d)}>
               Re-index
             </button>
             <button className="btn btn-danger btn-sm" disabled={busyId === d.id} onClick={() => remove(d)}>
               Xoá
             </button>
+          </div>
+          {versionsFor === d.id && versions.length > 0 && (
+            <div className="version-list" style={{ marginLeft: 36, marginTop: 6 }}>
+              {versions.map((v) => (
+                <div className="faint" key={v.version} style={{ fontSize: 12, lineHeight: 1.7 }}>
+                  v{v.version}
+                  {v.is_current ? ' (hiện tại)' : ''}
+                  {' · '}
+                  {v.chunk_count ?? '?'} chunks
+                  {v.created_at ? ` · ${fmtDateTime(v.created_at)}` : ''}
+                  {!v.file_exists && ' · ⚠ file đã xoá'}
+                </div>
+              ))}
+            </div>
+          )}
           </div>
         ))
       )}

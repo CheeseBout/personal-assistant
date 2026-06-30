@@ -11,6 +11,7 @@ import type {
   DesktopObserveResult,
   DesktopWindow,
   DocumentItem,
+  DocumentVersionsResult,
   EventItem,
   GoogleActionItem,
   GoogleStatus,
@@ -90,7 +91,7 @@ export const api = {
   // --- Streaming chat (SSE). Calls onEvent for each parsed event. Returns
   //     when the stream ends or aborts. Throws on HTTP error.
   async chatStream(
-    body: { message: string; session_id: string },
+    body: { message: string; session_id: string; doc_ids?: string[] },
     onEvent: (e: ChatStreamEvent) => void,
     signal?: AbortSignal,
   ): Promise<void> {
@@ -174,6 +175,10 @@ export const api = {
 
   reindexDocument(docId: string): Promise<Record<string, unknown>> {
     return req(`/api/documents/${encodeURIComponent(docId)}/reindex`, { method: 'POST' })
+  },
+
+  documentVersions(docId: string): Promise<DocumentVersionsResult> {
+    return req(`/api/documents/${encodeURIComponent(docId)}/versions`)
   },
 
   // --- Observability ---
