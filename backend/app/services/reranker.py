@@ -35,19 +35,21 @@ class Reranker:
     def rerank(self, query: str, candidates: List[Dict], top_k: int = None) -> List[Dict]:
         """Score candidates with the cross-encoder and sort desc.
 
-        Each candidate must have 'content'. Adds 'rerank_score'. Falls back to
-        existing order if the model is unavailable.
+        Each candidate must have 'content'. Returns a NEW list of shallow-copied
+        dicts with 'rerank_score' added — the caller's list is never mutated or
+        reordered. Falls back to existing order if the model is unavailable.
         """
         if not candidates:
             return []
+        items = [dict(c) for c in candidates]
         if not self.available:
-            for c in candidates:
+            for c in items:
                 c.setdefault("rerank_score", c.get("fusion_score", 0.0))
-            return candidates[:top_k] if top_k else candidates
+            return items[:top_k] if top_k else items
 
-        pairs = [(query, c["content"]) for c in candidates]
+        pairs = [(query, c["content"]) for c in items]
         scores = self.model.predict(pairs)
-        for c, s in zip(candidates, scores):
+        for c, s in zip(items, scores):
             c["rerank_score"] = float(s)
-        candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
-        return candidates[:top_k] if top_k else candidates
+        items.sort(key=lambda x: x["rerank_score"], reverse=True)
+        return items[:top_k] if top_k else items

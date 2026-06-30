@@ -16,17 +16,24 @@ def _normalize(text: str) -> str:
 def citation_coverage(answer: str, sources: List[Dict]) -> Dict:
     """Check how many distinct source files are explicitly referenced in the answer.
 
-    A source counts as cited if its filename (or filename stem) appears in the
-    answer text. Returns coverage stats.
+    A source counts as cited if its filename (or its stem) appears in the answer
+    as a whole token, not just any substring — so a generic stem like "a" won't
+    spuriously match the letter 'a' inside another word. Matching is
+    diacritic/case-insensitive on word boundaries.
     """
     ans = _normalize(answer)
     cited = []
     for s in sources:
-        fname = (s.get("filename") or "").lower()
+        fname = (s.get("filename") or "").lower().strip()
         if not fname:
             continue
         stem = fname.rsplit('.', 1)[0]
-        if fname in ans or (stem and stem in ans):
+        # Full filename (with extension) is a strong signal — accept a plain
+        # substring match. The stem alone must match as a bounded token to avoid
+        # false positives on very short/generic stems.
+        if fname in ans:
+            cited.append(s.get("filename"))
+        elif stem and len(stem) >= 3 and re.search(rf"(?<!\w){re.escape(stem)}(?!\w)", ans):
             cited.append(s.get("filename"))
 
     unique_cited = list(dict.fromkeys(cited))

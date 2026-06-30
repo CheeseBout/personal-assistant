@@ -271,6 +271,37 @@ async def list_documents(db: AsyncSession = Depends(get_async_db)) -> List[Dict[
     ]
 
 
+@router.get("/documents/{doc_id}/versions")
+async def list_document_versions(doc_id: str, db: AsyncSession = Depends(get_async_db)) -> Dict[str, Any]:
+    """Return the version history for a document (audit of indexing, §10.7)."""
+    doc = (await db.execute(select(Document).where(Document.id == doc_id))).scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    rows = (await db.execute(
+        select(DocumentVersion)
+        .where(DocumentVersion.document_id == doc_id)
+        .order_by(DocumentVersion.version.desc())
+    )).scalars().all()
+
+    current_version = (doc.metadata_json or {}).get("current_version", 1)
+    return {
+        "doc_id": doc_id,
+        "filename": doc.filename,
+        "current_version": current_version,
+        "versions": [
+            {
+                "version": v.version,
+                "chunk_count": v.chunk_count,
+                "created_at": v.created_at.isoformat() if v.created_at else None,
+                "is_current": v.version == current_version,
+                "file_exists": bool(v.file_path and Path(v.file_path).exists()),
+            }
+            for v in rows
+        ],
+    }
+
+
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str, db: AsyncSession = Depends(get_async_db)) -> Dict[str, Any]:
     """Delete a document and all of its derived data, then verify removal."""
@@ -282,6 +313,15 @@ async def delete_document(doc_id: str, db: AsyncSession = Depends(get_async_db))
         engine = get_rag_engine()
         engine.vector_store.delete_by_doc_id(doc_id)
         engine.keyword_index.delete_by_doc_id(doc_id)
+
+        # Collect every version's file path BEFORE deleting the rows, so we can
+        # clean up all on-disk files (not just the current head) and avoid orphans.
+        version_rows = (await db.execute(
+            select(DocumentVersion.file_path).where(DocumentVersion.document_id == doc_id)
+        )).scalars().all()
+        file_paths = {p for p in version_rows if p}
+        if doc.file_path:
+            file_paths.add(doc.file_path)
 
         await db.execute(delete(Chunk).where(Chunk.document_id == doc_id))
         await db.execute(delete(DocumentMetadata).where(DocumentMetadata.document_id == doc_id))
@@ -296,10 +336,15 @@ async def delete_document(doc_id: str, db: AsyncSession = Depends(get_async_db))
         ))
         await db.commit()
 
-        # Remove file from disk
-        file_path = Path(doc.file_path)
-        if file_path.exists():
-            file_path.unlink()
+        # Remove every version's file from disk. A failed unlink is logged but
+        # not fatal — the DB state is already consistent.
+        for p in file_paths:
+            try:
+                fp = Path(p)
+                if fp.exists():
+                    fp.unlink()
+            except OSError as e:
+                logger.warning(f"Could not remove file {p}: {e}")
 
         # Verify embeddings + keyword entries are gone
         vec_remaining = engine.vector_store.count_by_doc_id(doc_id)

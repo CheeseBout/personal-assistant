@@ -2,17 +2,8 @@
 
 from typing import Dict, Any
 
-from .rag import RAGEngine
+from .rag_singleton import get_rag_engine
 from ..core.logging_config import logger
-
-_rag_engine = None
-
-
-def get_rag_engine() -> RAGEngine:
-    global _rag_engine
-    if _rag_engine is None:
-        _rag_engine = RAGEngine()
-    return _rag_engine
 
 
 def execute_rag_search(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
@@ -37,8 +28,15 @@ def execute_rag_search(arguments: Dict[str, Any], session_id: str) -> Dict[str, 
     except (ValueError, TypeError):
         n_results = 10
 
+    # Optional single/multi-file scope (§10.4)
+    doc_ids = arguments.get("doc_ids")
+    if doc_ids is None and arguments.get("doc_id"):
+        doc_ids = [arguments["doc_id"]]
+    if doc_ids is not None and not isinstance(doc_ids, list):
+        doc_ids = [doc_ids]
+
     try:
-        results = get_rag_engine().search_as_tool(query, n_results=n_results)
+        results = get_rag_engine().search_as_tool(query, n_results=n_results, doc_ids=doc_ids)
         return {"results": results, "count": len(results), "query": query}
     except Exception as e:
         logger.error(f"rag.search tool error: {e}")

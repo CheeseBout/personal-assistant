@@ -68,18 +68,30 @@ class KeywordIndex:
             return ""
         return " OR ".join(f'"{t}"' for t in tokens)
 
-    def search(self, query: str, n_results: int = 20) -> List[Dict]:
-        """Return ranked chunks. Lower bm25() is better; we expose rank order."""
+    def search(self, query: str, n_results: int = 20, doc_ids: list = None) -> List[Dict]:
+        """Return ranked chunks. Lower bm25() is better; we expose rank order.
+
+        ``doc_ids``: if provided, restrict results to these document IDs.
+        """
         match = self._sanitize(query)
         if not match:
             return []
         try:
             with self._connect() as con:
-                cur = con.execute(
-                    "SELECT chunk_id, doc_id, version, content, bm25(chunks_fts) AS score "
-                    "FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY score LIMIT ?",
-                    (match, n_results),
-                )
+                if doc_ids:
+                    placeholders = ",".join("?" for _ in doc_ids)
+                    sql = (
+                        "SELECT chunk_id, doc_id, version, content, bm25(chunks_fts) AS score "
+                        f"FROM chunks_fts WHERE chunks_fts MATCH ? AND doc_id IN ({placeholders}) "
+                        "ORDER BY score LIMIT ?"
+                    )
+                    cur = con.execute(sql, [match, *doc_ids, n_results])
+                else:
+                    cur = con.execute(
+                        "SELECT chunk_id, doc_id, version, content, bm25(chunks_fts) AS score "
+                        "FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY score LIMIT ?",
+                        (match, n_results),
+                    )
                 rows = cur.fetchall()
         except sqlite3.OperationalError as e:
             logger.error(f"Keyword search failed: {e}")

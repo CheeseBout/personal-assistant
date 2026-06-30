@@ -26,7 +26,9 @@ from ..core.logging_config import logger
 from .news_service import generate_report
 
 # Only these task kinds may be scheduled to run automatically.
-SAFE_KINDS = {"news_summary", "desktop_monitor"}
+# doc_reindex is safe: it only re-indexes documents whose file changed on disk
+# (read + embed + local index write), never sends/deletes user data.
+SAFE_KINDS = {"news_summary", "desktop_monitor", "doc_reindex"}
 
 
 def _parse_schedule(schedule: str) -> Dict[str, Any]:
@@ -166,6 +168,10 @@ class SchedulerManager:
                     status = "success" if result.get("status") == "success" else result.get("status", "error")
                 elif task.kind == "desktop_monitor":
                     status = self._run_desktop_monitor(task, db)
+                elif task.kind == "doc_reindex":
+                    from .reindex_service import reindex_changed_documents
+                    reindex_changed_documents(db)
+                    status = "success"
             except Exception as e:
                 logger.error(f"Scheduled task {task_id} failed: {e}")
                 status = "error"
@@ -201,6 +207,14 @@ class SchedulerManager:
             if task.kind == "desktop_monitor":
                 status = self._run_desktop_monitor(task, db)
                 return {"status": status}
+            if task.kind == "doc_reindex":
+                from .reindex_service import reindex_changed_documents
+                summary = reindex_changed_documents(db)
+                task.last_run_at = datetime.utcnow()
+                task.last_status = "success"
+                db.add(task)
+                db.commit()
+                return {"status": "success", **summary}
             return {"status": "error", "error": f"Unknown task kind: {task.kind}"}
         finally:
             db.close()

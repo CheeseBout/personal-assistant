@@ -73,6 +73,21 @@ async def _ensure_session(db: AsyncSession, session_id: str, first_message: str)
         existing.title = existing.title or (first_message or "Phiên mới").strip().splitlines()[0][:MAX_TITLE_LEN]
 
 
+def _parse_doc_ids(request: dict) -> Optional[List[str]]:
+    """Extract an optional single-file/multi-file scope from the request.
+
+    Accepts ``doc_ids`` (list) or ``doc_id`` (single string). Returns None for
+    whole-corpus search (the default).
+    """
+    raw = request.get("doc_ids")
+    if raw is None:
+        single = request.get("doc_id")
+        raw = [single] if single else None
+    if not raw:
+        return None
+    return [str(d) for d in raw if d]
+
+
 def _build_llm_messages(retrieval_context: str, history: List[Dict[str, str]]) -> List[Dict[str, str]]:
     out = [{"role": "system", "content": build_rag_system_prompt(retrieval_context)}]
     for msg in history[-10:]:
@@ -89,6 +104,7 @@ async def chat(request: dict, db: AsyncSession = Depends(get_async_db)) -> Dict[
     """Synchronous RAG-grounded chat. Returns full answer + citations."""
     message = request.get("message", "").strip()
     session_id = request.get("session_id", str(uuid.uuid4()))
+    doc_ids = _parse_doc_ids(request)
 
     if not message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
@@ -106,7 +122,7 @@ async def chat(request: dict, db: AsyncSession = Depends(get_async_db)) -> Dict[
 
         retrieval = None
         try:
-            retrieval = await get_rag_engine().retrieve_and_rerank(message, db)
+            retrieval = await get_rag_engine().retrieve_and_rerank(message, db, doc_ids=doc_ids)
         except Exception as e:
             logger.error(f"RAG retrieval error: {e}")
 
@@ -174,6 +190,7 @@ async def chat_stream(request: dict, db: AsyncSession = Depends(get_async_db)) -
     """
     message = (request.get("message") or "").strip()
     session_id = request.get("session_id") or str(uuid.uuid4())
+    doc_ids = _parse_doc_ids(request)
     if not message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
@@ -193,7 +210,7 @@ async def chat_stream(request: dict, db: AsyncSession = Depends(get_async_db)) -
         try:
             retrieval = None
             try:
-                retrieval = await get_rag_engine().retrieve_and_rerank(message, db)
+                retrieval = await get_rag_engine().retrieve_and_rerank(message, db, doc_ids=doc_ids)
             except Exception as e:
                 logger.error(f"RAG retrieval error: {e}")
 

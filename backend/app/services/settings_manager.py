@@ -33,6 +33,7 @@ RAG_KEYS: Dict[str, tuple[str, type]] = {
     "citation_coverage_min": ("CITATION_COVERAGE_MIN", int),
     "hybrid_candidates": ("HYBRID_CANDIDATES", int),
     "rerank_threshold": ("RERANK_THRESHOLD", float),
+    "rrf_k": ("RRF_K", int),
 }
 
 

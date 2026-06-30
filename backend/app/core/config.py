@@ -83,8 +83,11 @@ class Settings(BaseSettings):
     RAG_THRESHOLD: float = 0.5
     RAG_MIN_RESULTS: int = 2
     RAG_MAX_RESULTS: int = 5
-    RAG_CHUNK_SIZE: int = 1000
-    RAG_CHUNK_OVERLAP: int = 100
+    # Char-based chunk size kept well under the embedding model's token cap.
+    # all-MiniLM-L6-v2 truncates at ~256 word-pieces; ~512 chars (~120-180
+    # tokens for VN/EN prose) leaves headroom so the tail isn't silently dropped.
+    RAG_CHUNK_SIZE: int = 512
+    RAG_CHUNK_OVERLAP: int = 80
 
     # Phase 2 - Hybrid search + Rerank
     HYBRID_CANDIDATES: int = 20

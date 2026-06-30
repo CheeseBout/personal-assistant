@@ -115,14 +115,36 @@ class DocumentParser:
 
     @staticmethod
     def _parse_xlsx(file_path: str) -> List[Dict[str, Any]]:
+        """Parse each sheet into row-group segments with a header line repeated.
+
+        Instead of dumping a whole sheet as one giant blob, we emit segments of
+        ~40 rows each, prefixed with the column header, so retrieval can cite a
+        specific sheet + row range and chunks never cut across a row mid-cell.
+        """
         import pandas as pd
+        ROWS_PER_SEGMENT = 40
         dfs = pd.read_excel(file_path, sheet_name=None)
-        segments = []
+        segments: List[Dict[str, Any]] = []
         for sheet_name, df in dfs.items():
             if df.empty:
                 continue
-            text = f"=== Sheet: {sheet_name} ===\n" + df.to_string(index=False)
-            segments.append({"text": text, "meta": {"sheet": sheet_name}})
+            header = " | ".join(str(c) for c in df.columns)
+            total = len(df)
+            for start in range(0, total, ROWS_PER_SEGMENT):
+                block = df.iloc[start:start + ROWS_PER_SEGMENT]
+                row_lines = [
+                    " | ".join("" if pd.isna(v) else str(v) for v in row)
+                    for row in block.itertuples(index=False, name=None)
+                ]
+                end_row = start + len(block)
+                text = (
+                    f"=== Sheet: {sheet_name} (hàng {start + 1}-{end_row}) ===\n"
+                    f"{header}\n" + "\n".join(row_lines)
+                )
+                segments.append({
+                    "text": text,
+                    "meta": {"sheet": sheet_name, "row_start": start + 1, "row_end": end_row},
+                })
         return segments
 
 
@@ -177,18 +199,40 @@ class Chunker:
 
     @staticmethod
     def _split(text: str, chunk_size: int, overlap: int) -> List[Dict[str, Any]]:
+        """Split text into overlapping pieces, preferring natural boundaries.
+
+        Within each window we back off the cut point to the last paragraph
+        break, sentence end, or whitespace so chunks don't start/end mid-word
+        or mid-sentence (which hurts both embedding and rerank quality). Falls
+        back to a hard character cut when no boundary is found.
+        """
         pieces = []
         start = 0
         text_len = len(text)
-        step = max(1, chunk_size - overlap)
         while start < text_len:
-            end = min(start + chunk_size, text_len)
+            hard_end = min(start + chunk_size, text_len)
+            end = hard_end
+            if hard_end < text_len:
+                window = text[start:hard_end]
+                # Only honor a boundary if it lands past the halfway mark, so we
+                # don't produce tiny chunks.
+                floor = (hard_end - start) // 2
+                cut = -1
+                for sep in ("\n\n", ". ", ".\n", "! ", "? ", "\n", " "):
+                    idx = window.rfind(sep)
+                    if idx >= floor:
+                        cut = idx + len(sep)
+                        break
+                if cut > 0:
+                    end = start + cut
             chunk = text[start:end]
             if chunk.strip():
                 pieces.append({"content": chunk, "start_char": start, "end_char": end})
             if end >= text_len:
                 break
-            start += step
+            # Next window overlaps the previous one; guard against non-progress.
+            next_start = end - overlap
+            start = next_start if next_start > start else end
         return pieces
 
     @staticmethod

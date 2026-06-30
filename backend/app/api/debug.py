@@ -3,6 +3,7 @@ from typing import Dict, Any
 import time
 
 from ..services.rag_singleton import get_rag_engine
+from ..services.settings_manager import SettingsManager
 from ..core.config import settings
 
 router = APIRouter(prefix="/api/debug", tags=["debug"])
@@ -24,14 +25,18 @@ async def debug_retrieve(
         return {"error": "Query parameter 'q' is required"}
 
     engine = get_rag_engine()
+    rag_cfg = SettingsManager.get_instance().get_rag_settings()
+    candidates = rag_cfg.get("hybrid_candidates", settings.HYBRID_CANDIDATES)
+    rrf_k = rag_cfg.get("rrf_k", settings.RRF_K)
+    use_rerank = rag_cfg.get("use_rerank", settings.USE_RERANK)
 
     start = time.time()
-    vector = engine._vector_search(q, settings.HYBRID_CANDIDATES)
-    keyword = engine._keyword_search(q, settings.HYBRID_CANDIDATES)
-    fused = engine._rrf_fuse(vector, keyword, settings.RRF_K)
+    vector = engine._vector_search(q, candidates)
+    keyword = engine._keyword_search(q, candidates)
+    fused = engine._rrf_fuse(vector, keyword, rrf_k)
 
     from ..services.reranker import get_reranker
-    reranked = get_reranker().rerank(q, [dict(f) for f in fused]) if settings.USE_RERANK else fused
+    reranked = get_reranker().rerank(q, [dict(f) for f in fused]) if use_rerank else fused
     elapsed = time.time() - start
 
     def trim(items, keys):
@@ -46,7 +51,7 @@ async def debug_retrieve(
     return {
         "query": q,
         "timing_ms": round(elapsed * 1000, 2),
-        "use_rerank": settings.USE_RERANK,
+        "use_rerank": use_rerank,
         "rerank_available": get_reranker().available,
         "counts": {
             "vector": len(vector),
@@ -61,16 +66,17 @@ async def debug_retrieve(
 
 @router.get("/settings")
 async def debug_settings() -> Dict[str, Any]:
-    """Expose effective Phase 2 RAG settings."""
+    """Expose effective Phase 2 RAG settings (with runtime overrides applied)."""
     _require_debug_enabled()
+    rag_cfg = SettingsManager.get_instance().get_rag_settings()
     return {
-        "hybrid_candidates": settings.HYBRID_CANDIDATES,
-        "rrf_k": settings.RRF_K,
+        "hybrid_candidates": rag_cfg.get("hybrid_candidates", settings.HYBRID_CANDIDATES),
+        "rrf_k": rag_cfg.get("rrf_k", settings.RRF_K),
         "rerank_model": settings.RERANK_MODEL,
-        "rerank_threshold": settings.RERANK_THRESHOLD,
-        "use_rerank": settings.USE_RERANK,
-        "rag_min_results": settings.RAG_MIN_RESULTS,
-        "rag_max_results": settings.RAG_MAX_RESULTS,
-        "citation_coverage_min": settings.CITATION_COVERAGE_MIN,
+        "rerank_threshold": rag_cfg.get("rerank_threshold", settings.RERANK_THRESHOLD),
+        "use_rerank": rag_cfg.get("use_rerank", settings.USE_RERANK),
+        "rag_min_results": rag_cfg.get("min_results", settings.RAG_MIN_RESULTS),
+        "rag_max_results": rag_cfg.get("max_results", settings.RAG_MAX_RESULTS),
+        "citation_coverage_min": rag_cfg.get("citation_coverage_min", settings.CITATION_COVERAGE_MIN),
         "vector_store_path": settings.VECTOR_STORE_PATH,
     }

@@ -51,15 +51,16 @@ class RAGEngine:
 
     # ---- Retrieval -------------------------------------------------------
 
-    def _vector_search(self, query: str, n: int) -> List[Dict]:
-        results = self.vector_store.search(query, n_results=n)
+    def _vector_search(self, query: str, n: int, doc_ids: list = None) -> List[Dict]:
+        where = {"doc_id": {"$in": doc_ids}} if doc_ids else None
+        results = self.vector_store.search(query, n_results=n, where=where)
         for r in results:
             distance = r.get('distance', 1.0)
             r['vector_score'] = float(np.exp(-distance)) if distance is not None else 0.0
         return results
 
-    def _keyword_search(self, query: str, n: int) -> List[Dict]:
-        return self.keyword_index.search(query, n_results=n)
+    def _keyword_search(self, query: str, n: int, doc_ids: list = None) -> List[Dict]:
+        return self.keyword_index.search(query, n_results=n, doc_ids=doc_ids)
 
     @staticmethod
     def _rrf_fuse(vector: List[Dict], keyword: List[Dict], k: int) -> List[Dict]:
@@ -86,8 +87,11 @@ class RAGEngine:
         fused.sort(key=lambda x: x['fusion_score'], reverse=True)
         return fused
 
-    def hybrid_search(self, query: str, candidates: int = None) -> List[Dict]:
+    def hybrid_search(self, query: str, candidates: int = None, doc_ids: list = None) -> List[Dict]:
         """Vector + keyword retrieval fused with RRF, then cross-encoder rerank.
+
+        ``doc_ids``: if provided, restrict results to these document IDs
+        (single-file scope per §10.4).
 
         Vector and keyword searches run in parallel via a small thread pool —
         both are blocking calls (numpy / native sqlite) so threads give a real
@@ -100,9 +104,10 @@ class RAGEngine:
         if candidates is None:
             candidates = rag_cfg.get("hybrid_candidates", settings.HYBRID_CANDIDATES)
         use_rerank = rag_cfg.get("use_rerank", settings.USE_RERANK)
+        rrf_k = rag_cfg.get("rrf_k", settings.RRF_K)
 
-        vec_future = _search_pool.submit(self._vector_search, query, candidates)
-        kw_future = _search_pool.submit(self._keyword_search, query, candidates)
+        vec_future = _search_pool.submit(self._vector_search, query, candidates, doc_ids)
+        kw_future = _search_pool.submit(self._keyword_search, query, candidates, doc_ids)
         try:
             vector = vec_future.result()
         except Exception as e:
@@ -114,7 +119,7 @@ class RAGEngine:
             logger.error(f"Keyword search failed: {e}")
             keyword = []
 
-        fused = self._rrf_fuse(vector, keyword, settings.RRF_K)
+        fused = self._rrf_fuse(vector, keyword, rrf_k)
 
         if use_rerank:
             fused = get_reranker().rerank(query, fused)
@@ -123,16 +128,16 @@ class RAGEngine:
                 c['rerank_score'] = c.get('fusion_score', 0.0)
         return fused
 
-    def search(self, query: str, n_results: int = 10) -> List[Dict]:
+    def search(self, query: str, n_results: int = 10, doc_ids: list = None) -> List[Dict]:
         """Sync hybrid search (compat)."""
-        return self.hybrid_search(query)[:n_results]
+        return self.hybrid_search(query, doc_ids=doc_ids)[:n_results]
 
-    async def search_async(self, query: str, n_results: int = 10) -> List[Dict]:
-        return self.hybrid_search(query)[:n_results]
+    async def search_async(self, query: str, n_results: int = 10, doc_ids: list = None) -> List[Dict]:
+        return self.hybrid_search(query, doc_ids=doc_ids)[:n_results]
 
-    def search_as_tool(self, query: str, n_results: int = 10) -> List[Dict]:
+    def search_as_tool(self, query: str, n_results: int = 10, doc_ids: list = None) -> List[Dict]:
         """Tool-friendly search: returns simplified results for agent context."""
-        results = self.hybrid_search(query)[:n_results]
+        results = self.hybrid_search(query, doc_ids=doc_ids)[:n_results]
         simplified = []
         for r in results:
             meta = r.get('metadata', {})
@@ -163,7 +168,10 @@ class RAGEngine:
         if meta.get('page') is not None:
             loc_parts.append(f"trang {meta['page']}")
         if meta.get('sheet'):
-            loc_parts.append(f"sheet {meta['sheet']}")
+            sheet_part = f"sheet {meta['sheet']}"
+            if meta.get('row_start') and meta.get('row_end'):
+                sheet_part += f" (hàng {meta['row_start']}-{meta['row_end']})"
+            loc_parts.append(sheet_part)
         if meta.get('heading'):
             loc_parts.append(f"mục \"{meta['heading']}\"")
         loc_parts.append(f"chunk {meta.get('chunk_index', '?')}")
@@ -176,12 +184,14 @@ class RAGEngine:
         db: AsyncSession,
         threshold: float = None,
         min_results: int = None,
+        doc_ids: list = None,
     ) -> Optional[Dict]:
-        """Hybrid retrieve → rerank → threshold filter → format citations."""
+        """Hybrid retrieve → rerank → threshold filter → format citations.
+
+        ``doc_ids``: restrict retrieval to specific documents (single-file scope).
+        """
         from ..core.config import settings
         from .settings_manager import SettingsManager
-        # Pull effective overrides so runtime PATCH /api/rag/settings is respected
-        # without restarting the server.
         rag_cfg = SettingsManager.get_instance().get_rag_settings()
 
         if threshold is None:
@@ -190,7 +200,7 @@ class RAGEngine:
             min_results = rag_cfg.get("min_results", settings.RAG_MIN_RESULTS)
         max_results = rag_cfg.get("max_results", settings.RAG_MAX_RESULTS)
 
-        results = self.hybrid_search(query)
+        results = self.hybrid_search(query, doc_ids=doc_ids)
         if not results:
             logger.debug(f"No retrieval results for query: {query[:50]}...")
             return None
