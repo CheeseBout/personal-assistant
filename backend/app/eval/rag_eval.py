@@ -326,16 +326,135 @@ def _format_report(summary: Dict[str, Any], k: int, per_q: List[Dict[str, Any]],
     return "\n".join(lines)
 
 
+def _collect_scores(
+    engine: RAGEngine, questions: List[Dict[str, Any]], k: int
+) -> List[Dict[str, Any]]:
+    """Run retrieval ONCE per question; cache the sorted chunk scores.
+
+    Threshold sweeping then operates on cached scores — no need to re-embed or
+    re-rerank for each candidate threshold.
+    """
+    rows = []
+    for q in questions:
+        raw = engine.hybrid_search(q["question"])
+        scores = sorted(
+            (r.get("rerank_score", r.get("fusion_score", 0.0)) for r in raw),
+            reverse=True,
+        )
+        retrieved = _doc_ids_from(raw)
+        expected = q.get("expected_doc_ids", [])
+        rows.append({
+            "id": q["id"],
+            "answerable": bool(q.get("answerable")),
+            "expected": expected,
+            "scores": scores,
+            "retrieval_hit": (bool(set(expected) & set(retrieved[:k])) if expected else None),
+        })
+    return rows
+
+
+def _decision_score(scores: List[float], min_results: int) -> float:
+    """Score that decides answer-vs-refuse: the min_results-th highest chunk score.
+
+    A question is answered iff at least ``min_results`` chunks clear the
+    threshold, i.e. the min_results-th highest score >= threshold.
+    """
+    if len(scores) < min_results:
+        return float("-inf")
+    return scores[min_results - 1]
+
+
+def _sweep(rows: List[Dict[str, Any]], min_results_options: List[int]) -> Dict[str, Any]:
+    """Sweep thresholds for each min_results; report confusion + a recommendation.
+
+    Goal: separate answerable decision-scores (want answered) from unanswerable
+    ones (want refused). The recommended threshold minimizes total errors
+    (false refusals + missed refusals), tie-breaking toward fewer false refusals
+    (answering a correctly-retrieved doc is the higher-value outcome).
+    """
+    best: Optional[Dict[str, Any]] = None
+    tables: List[Dict[str, Any]] = []
+
+    for m in min_results_options:
+        ans = [(_decision_score(r["scores"], m), r) for r in rows if r["answerable"]]
+        unans = [(_decision_score(r["scores"], m), r) for r in rows if not r["answerable"]]
+
+        # Candidate thresholds: midpoints between all observed decision scores,
+        # plus a touch below the min and above the max.
+        all_scores = sorted({s for s, _ in ans + unans if s != float("-inf")})
+        candidates: List[float] = []
+        if all_scores:
+            candidates.append(all_scores[0] - 0.5)
+            for a, b in zip(all_scores, all_scores[1:]):
+                candidates.append(round((a + b) / 2, 4))
+            candidates.append(all_scores[-1] + 0.5)
+
+        rows_for_m = []
+        for t in candidates:
+            false_refusal = sum(1 for s, _ in ans if s < t)
+            missed_refusal = sum(1 for s, _ in unans if s >= t)
+            total_err = false_refusal + missed_refusal
+            entry = {
+                "min_results": m,
+                "threshold": round(t, 4),
+                "false_refusal": false_refusal,
+                "n_ans": len(ans),
+                "missed_refusal": missed_refusal,
+                "n_unans": len(unans),
+                "total_err": total_err,
+            }
+            rows_for_m.append(entry)
+            # Lower total error wins; tie-break toward fewer false refusals.
+            key = (total_err, false_refusal)
+            if best is None or key < (best["total_err"], best["false_refusal"]):
+                best = entry
+        tables.append({"min_results": m, "rows": rows_for_m})
+
+    return {"tables": tables, "recommended": best}
+
+
+def _format_sweep(rows: List[Dict[str, Any]], sweep: Dict[str, Any], min_results_options: List[int]) -> str:
+    out = ["", "=== Threshold sweep ===", ""]
+    # Per-question decision scores make the answerable/unanswerable gap visible.
+    out.append("-- Decision scores (m-th highest chunk score) --")
+    for m in min_results_options:
+        out.append(f"  min_results={m}:")
+        for r in sorted(rows, key=lambda x: (not x["answerable"], x["id"])):
+            ds = _decision_score(r["scores"], m)
+            ds_s = f"{ds:.3f}" if ds != float("-inf") else "-inf"
+            tag = "ANS  " if r["answerable"] else "UNANS"
+            out.append(f"    [{r['id']:<3}] {tag} decision={ds_s}  top={r['scores'][0]:.3f}")
+    out.append("")
+    for tbl in sweep["tables"]:
+        out.append(f"-- min_results={tbl['min_results']} --")
+        out.append("    threshold   false_refusal   missed_refusal   total_err")
+        for e in tbl["rows"]:
+            out.append(
+                f"    {e['threshold']:>9.3f}   {e['false_refusal']:>13}/{e['n_ans']}"
+                f"   {e['missed_refusal']:>12}/{e['n_unans']}   {e['total_err']:>9}"
+            )
+        out.append("")
+    rec = sweep["recommended"]
+    if rec:
+        out.append(
+            f">> Recommended: RERANK_THRESHOLD={rec['threshold']}  RAG_MIN_RESULTS={rec['min_results']}"
+            f"  (false_refusal={rec['false_refusal']}/{rec['n_ans']}, "
+            f"missed_refusal={rec['missed_refusal']}/{rec['n_unans']})"
+        )
+    out.append("")
+    return "\n".join(out)
+
+
 def _run(args: argparse.Namespace) -> int:
     golden = _load_golden()
     questions = golden["questions"]
     k = args.k or golden.get("k", 5)
 
     api_key_set = bool(settings.OPENAI_API_KEY or os.getenv("OPENAI_API_KEY"))
-    run_llm = api_key_set and not args.no_llm
+    run_llm = api_key_set and not args.no_llm and not args.sweep
 
-    threshold = settings.RERANK_THRESHOLD
-    min_results = settings.RAG_MIN_RESULTS
+    threshold = args.threshold if args.threshold is not None else settings.RERANK_THRESHOLD
+    min_results = args.min_results if args.min_results is not None else settings.RAG_MIN_RESULTS
 
     # The eval doesn't initialize the app DB, so SettingsManager's lazy load of
     # the app_settings table would fail and retry on every hybrid_search call,
@@ -361,6 +480,16 @@ def _run(args: argparse.Namespace) -> int:
             print("[eval] no fixture docs found; aborting.", file=sys.stderr)
             return 0
         doc_id_to_filename = {d: d for d in doc_ids}  # fixtures already use stem == id
+
+        if args.sweep:
+            min_results_options = [1, 2, 3]
+            rows = _collect_scores(engine, questions, k)
+            sweep = _sweep(rows, min_results_options)
+            if args.json:
+                print(json.dumps(sweep, ensure_ascii=False, indent=2))
+            else:
+                print(_format_sweep(rows, sweep, min_results_options))
+            return 0
 
         for q in questions:
             per_q.append(_evaluate_one(
@@ -396,6 +525,9 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable JSON output")
     parser.add_argument("--verbose", action="store_true", help="print per-question rows")
     parser.add_argument("--no-llm", action="store_true", help="skip the answer-quality metrics even if a key is set")
+    parser.add_argument("--threshold", type=float, default=None, help="override RERANK_THRESHOLD for this run")
+    parser.add_argument("--min-results", type=int, default=None, dest="min_results", help="override RAG_MIN_RESULTS for this run")
+    parser.add_argument("--sweep", action="store_true", help="sweep thresholds/min_results and recommend a balanced cut")
     args = parser.parse_args()
     return _run(args)
 

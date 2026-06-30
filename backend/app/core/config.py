@@ -81,7 +81,11 @@ class Settings(BaseSettings):
 
     # RAG Settings
     RAG_THRESHOLD: float = 0.5
-    RAG_MIN_RESULTS: int = 2
+    # min_results=1: a single strongly-relevant chunk is enough to answer.
+    # Tuned via app/eval/rag_eval.py --sweep: min_results=2 structurally refused
+    # queries backed by just one relevant chunk (e.g. a fact in one document),
+    # because the 2nd-best chunk scored deeply negative under the cross-encoder.
+    RAG_MIN_RESULTS: int = 1
     RAG_MAX_RESULTS: int = 5
     # Char-based chunk size kept well under the embedding model's token cap.
     # all-MiniLM-L6-v2 truncates at ~256 word-pieces; ~512 chars (~120-180
@@ -93,7 +97,13 @@ class Settings(BaseSettings):
     HYBRID_CANDIDATES: int = 20
     RRF_K: int = 60
     RERANK_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    RERANK_THRESHOLD: float = 0.0
+    # Cross-encoder logits are unbounded; tuned via app/eval/rag_eval.py --sweep
+    # against the 512-char chunking. 1.0 sits above the junk cluster
+    # (unanswerable queries scored < 0) and below every relevant query, giving
+    # 0/7 false refusals with 2/3 junk refused. The remaining junk case shares
+    # heavy vocabulary with a real doc and is caught by the grounding verifier
+    # (verify_answer), the second line of defense.
+    RERANK_THRESHOLD: float = 1.0
     USE_RERANK: bool = True
 
     # Phase 2 - Grounding / citation
