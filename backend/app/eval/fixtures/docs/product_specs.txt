@@ -1,0 +1,22 @@
+Product Specifications - Model X200 Laptop
+
+Display: 14-inch IPS panel, 1920x1200 resolution, 400 nits brightness,
+99% sRGB color gamut. Anti-glare coating included.
+
+Battery: 75 Wh lithium-polymer battery. Rated for up to 14 hours of typical
+office use on a single charge. Supports fast charging via 100W USB-C adapter,
+reaching 60% in 45 minutes.
+
+Storage: 1 TB NVMe PCIe 4.0 solid-state drive, soldered. Maximum sequential
+read speed of 7000 MB/s.
+
+Memory: 16 GB LPDDR5 RAM running at 6400 MHz. Not user-upgradeable.
+
+Connectivity: Wi-Fi 6E, Bluetooth 5.3, two Thunderbolt 4 ports, one USB-A 3.2,
+HDMI 2.1, and a 3.5mm audio combo jack.
+
+Warranty: Standard manufacturer warranty is 24 months from purchase date,
+covering defects in materials and workmanship. Extended warranty up to
+36 months available at additional cost.
+
+Weight: 1.35 kg without power adapter.

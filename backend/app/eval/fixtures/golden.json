@@ -1,0 +1,72 @@
+{
+  "k": 5,
+  "questions": [
+    {
+      "id": "q1",
+      "question": "Nhân viên được nghỉ phép bao nhiêu ngày có lương trong một năm?",
+      "answerable": true,
+      "expected_doc_ids": ["chinh_sach_cong_ty"],
+      "answer_must_include": ["12"]
+    },
+    {
+      "id": "q2",
+      "question": "Giờ làm việc tiêu chuẩn mỗi tuần là bao nhiêu giờ?",
+      "answerable": true,
+      "expected_doc_ids": ["chinh_sach_cong_ty"],
+      "answer_must_include": ["40"]
+    },
+    {
+      "id": "q3",
+      "question": "Nhân viên được làm việc từ xa tối đa mấy ngày mỗi tuần?",
+      "answerable": true,
+      "expected_doc_ids": ["chinh_sach_cong_ty"],
+      "answer_must_include": ["2"]
+    },
+    {
+      "id": "q4",
+      "question": "What is the battery capacity and rated battery life of the X200 laptop?",
+      "answerable": true,
+      "expected_doc_ids": ["product_specs"],
+      "answer_must_include": ["75", "14"]
+    },
+    {
+      "id": "q5",
+      "question": "How long is the standard warranty for the X200?",
+      "answerable": true,
+      "expected_doc_ids": ["product_specs"],
+      "answer_must_include": ["24"]
+    },
+    {
+      "id": "q6",
+      "question": "Doanh thu quý 4 năm 2025 là bao nhiêu tỷ đồng?",
+      "answerable": true,
+      "expected_doc_ids": ["bao_cao_quy"],
+      "answer_must_include": ["156"]
+    },
+    {
+      "id": "q7",
+      "question": "Tổng doanh thu cả năm 2025 đạt bao nhiêu?",
+      "answerable": true,
+      "expected_doc_ids": ["bao_cao_quy"],
+      "answer_must_include": ["539"]
+    },
+    {
+      "id": "q8",
+      "question": "Chính sách hoàn tiền khi khách hàng trả lại sản phẩm trong 30 ngày là gì?",
+      "answerable": false,
+      "expected_doc_ids": []
+    },
+    {
+      "id": "q9",
+      "question": "Giám đốc điều hành công ty tên là gì và sinh năm bao nhiêu?",
+      "answerable": false,
+      "expected_doc_ids": []
+    },
+    {
+      "id": "q10",
+      "question": "What is the price of the X200 laptop in US dollars?",
+      "answerable": false,
+      "expected_doc_ids": []
+    }
+  ]
+}

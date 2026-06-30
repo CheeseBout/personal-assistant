@@ -16,10 +16,16 @@ _search_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rag-search"
 
 
 class RAGEngine:
-    def __init__(self):
+    def __init__(self, persist_dir: str = None, keyword_db_path: str = None):
+        """RAG engine over a vector store + keyword index.
+
+        ``persist_dir`` / ``keyword_db_path`` default to the production paths;
+        the eval harness passes temp paths to build an isolated index without
+        touching real data.
+        """
         self.embedding_service = EmbeddingService()
-        self.vector_store = VectorStore(embedding_service=self.embedding_service)
-        self.keyword_index = KeywordIndex()
+        self.vector_store = VectorStore(persist_dir=persist_dir, embedding_service=self.embedding_service)
+        self.keyword_index = KeywordIndex(db_path=keyword_db_path)
         self.chunker = Chunker()
 
     async def process_document(
