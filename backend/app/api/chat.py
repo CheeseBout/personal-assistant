@@ -249,6 +249,9 @@ async def chat_stream(request: dict, db: AsyncSession = Depends(get_async_db)) -
                 )
                 yield _sse_event({"type": "verdict", **verdict_payload})
 
+                if not verdict_payload.get("accepted"):
+                    yield _sse_event({"type": "ungrounded", "message": "Câu trả lời chưa đủ căn cứ từ tài liệu."})
+
             # Persist assistant message
             final_text = "".join(full_answer_parts)
             ungrounded = bool(verdict_payload and not verdict_payload.get("accepted"))

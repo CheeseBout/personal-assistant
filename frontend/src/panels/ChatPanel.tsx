@@ -40,6 +40,7 @@ export function ChatPanel({ sessionId, onApprovalChange, onSessionsChange, showT
   const [streaming, setStreaming] = useState<string>('') // currently-streaming assistant text
   const [streamingCitations, setStreamingCitations] = useState<Citation[]>([])
   const [streamVerdict, setStreamVerdict] = useState<null | { accepted: boolean; grounding?: number }>(null)
+  const [ungrounded, setUngrounded] = useState(false)
   const [intentPrompt, setIntentPrompt] = useState<IntentPrompt | null>(null)
   const [approvalPrompt, setApprovalPrompt] = useState<ApprovalPrompt | null>(null)
   const [docs, setDocs] = useState<DocumentItem[]>([])
@@ -175,6 +176,7 @@ export function ChatPanel({ sessionId, onApprovalChange, onSessionsChange, showT
     setStreaming('')
     setStreamingCitations([])
     setStreamVerdict(null)
+    setUngrounded(false)
     let buffer = ''
     let citations: Citation[] = []
     let verdict: { accepted: boolean; grounding?: number } | null = null
@@ -192,6 +194,8 @@ export function ChatPanel({ sessionId, onApprovalChange, onSessionsChange, showT
         } else if (e.type === 'verdict') {
           verdict = { accepted: e.accepted, grounding: e.grounding }
           setStreamVerdict(verdict)
+        } else if (e.type === 'ungrounded') {
+          setUngrounded(true)
         } else if (e.type === 'error') {
           throw new Error(e.message || 'Streaming error')
         }
@@ -305,6 +309,12 @@ export function ChatPanel({ sessionId, onApprovalChange, onSessionsChange, showT
           {messages.map((m) => (
             <MessageBubble key={m.id} msg={m} />
           ))}
+
+          {ungrounded && (
+            <div className="ungrounded-warning" style={{color: '#d32f2f', background: '#fff3e0', padding: '8px 12px', borderRadius: 6, margin: '4px 0', fontSize: '0.9em'}}>
+              ⚠ Câu trả lời chưa đủ căn cứ từ tài liệu — vui lòng kiểm tra lại.
+            </div>
+          )}
 
           {/* Live streaming bubble */}
           {streaming && (

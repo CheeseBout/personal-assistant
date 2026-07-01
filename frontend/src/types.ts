@@ -291,6 +291,8 @@ export interface RagSettings {
   citation_coverage_min: number
   hybrid_candidates: number
   rerank_threshold: number
+  min_grounding?: number
+  reranker_available?: boolean
 }
 
 // SSE events from POST /api/chat/stream
@@ -298,5 +300,6 @@ export type ChatStreamEvent =
   | { type: 'retrieval'; sources: Citation[] }
   | { type: 'delta'; content: string }
   | { type: 'verdict'; accepted: boolean; refusal?: boolean; grounding?: number; coverage?: unknown }
+  | { type: 'ungrounded'; message: string }
   | { type: 'done'; session_id: string }
   | { type: 'error'; message: string }
