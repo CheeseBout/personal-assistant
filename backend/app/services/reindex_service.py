@@ -20,32 +20,59 @@ from ..core.logging_config import logger
 
 
 def _reindex_one(db: Session, doc: Document, current_hash: str) -> int:
-    """Create + index a new version for a single document. Returns chunk count."""
+    """Create + index a new version for a single document. Returns chunk count.
+
+    Uses an atomic "add-new-then-delete-old" strategy: new version data is
+    inserted first; old version data is only removed after all new inserts
+    succeed.  If the new indexing fails midway, partially-added new vectors
+    are cleaned up and the old version remains intact.
+    """
     max_v = db.execute(
         select(func.max(DocumentVersion.version)).where(DocumentVersion.document_id == doc.id)
     ).scalar() or 1
     new_version = max_v + 1
+    old_version = max_v
 
     engine = get_rag_engine()
-    # Drop previous version vectors/keywords from active retrieval.
-    engine.vector_store.delete_by_doc_id(doc.id)
-    engine.keyword_index.delete_by_doc_id(doc.id)
 
-    segments = DocumentParser.parse_segments(doc.file_path)
-    chunks_data = Chunker.chunk_segments(segments)
+    # --- Phase 1: add new version alongside old ---
+    try:
+        segments = DocumentParser.parse_segments(doc.file_path)
+        chunks_data = Chunker.chunk_segments(segments)
 
-    for cd in chunks_data:
-        db.add(Chunk(
-            id=f"{doc.id}_v{new_version}_{cd['index']}",
-            document_id=doc.id,
-            version=new_version,
-            chunk_index=cd['index'],
-            content=cd['content'],
-            embedding_id=f"{doc.id}_v{new_version}_{cd['index']}",
-            metadata_json={"start": cd['start_char'], "end": cd['end_char'], **(cd.get('meta') or {})},
-        ))
+        for cd in chunks_data:
+            db.add(Chunk(
+                id=f"{doc.id}_v{new_version}_{cd['index']}",
+                document_id=doc.id,
+                version=new_version,
+                chunk_index=cd['index'],
+                content=cd['content'],
+                embedding_id=f"{doc.id}_v{new_version}_{cd['index']}",
+                metadata_json={"start": cd['start_char'], "end": cd['end_char'], **(cd.get('meta') or {})},
+            ))
 
-    result = engine.process_document(doc.id, doc.file_path, doc.filename, chunks_data, version=new_version)
+        result = engine.process_document_sync(doc.id, doc.file_path, doc.filename, chunks_data, version=new_version)
+    except Exception:
+        # Rollback: remove any partially-added new-version vectors/keywords
+        try:
+            engine.vector_store.delete_by_version(doc.id, new_version)
+        except Exception:
+            pass
+        try:
+            engine.keyword_index.delete_by_version(doc.id, new_version)
+        except Exception:
+            pass
+        raise
+
+    # --- Phase 2: new version fully indexed — safe to drop old ---
+    try:
+        engine.vector_store.delete_by_version(doc.id, old_version)
+    except Exception as e:
+        logger.warning(f"auto-reindex: failed to delete old vectors v{old_version} for {doc.id}: {e}")
+    try:
+        engine.keyword_index.delete_by_version(doc.id, old_version)
+    except Exception as e:
+        logger.warning(f"auto-reindex: failed to delete old keywords v{old_version} for {doc.id}: {e}")
 
     db.add(DocumentVersion(
         id=str(uuid.uuid4()),
@@ -78,11 +105,32 @@ def reindex_changed_documents(db: Session) -> Dict[str, Any]:
         if not doc.file_path or not Path(doc.file_path).exists():
             missing += 1
             continue
+
+        # Prefilter by mtime + size to avoid hashing unchanged files
+        try:
+            stat = Path(doc.file_path).stat()
+            meta = doc.metadata_json or {}
+            last_mtime = meta.get("last_mtime")
+            last_size = meta.get("last_size")
+            if last_mtime is not None and last_size is not None:
+                if stat.st_mtime == last_mtime and stat.st_size == last_size:
+                    continue
+        except OSError:
+            pass
+
         try:
             current_hash = Chunker.calculate_file_hash(doc.file_path)
         except OSError as e:
             logger.warning(f"auto-reindex: cannot hash {doc.file_path}: {e}")
             continue
+
+        # Update mtime/size even if hash unchanged
+        doc.metadata_json = {
+            **(doc.metadata_json or {}),
+            "last_mtime": stat.st_mtime,
+            "last_size": stat.st_size,
+        }
+
         if current_hash == doc.file_hash:
             continue
         try:

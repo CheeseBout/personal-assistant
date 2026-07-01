@@ -51,6 +51,15 @@ class KeywordIndex:
             con.execute("DELETE FROM chunks_fts WHERE doc_id = ?", (doc_id,))
             con.commit()
 
+    def delete_by_version(self, doc_id: str, version: int):
+        """Delete keyword index entries for a specific version of a document."""
+        with self._connect() as con:
+            con.execute(
+                "DELETE FROM chunks_fts WHERE doc_id = ? AND version = ?",
+                (doc_id, version),
+            )
+            con.commit()
+
     def count_by_doc_id(self, doc_id: str) -> int:
         with self._connect() as con:
             cur = con.execute("SELECT COUNT(*) FROM chunks_fts WHERE doc_id = ?", (doc_id,))
@@ -60,13 +69,14 @@ class KeywordIndex:
     def _sanitize(query: str) -> str:
         """Turn an arbitrary user string into a safe FTS5 MATCH expression.
 
-        Wrap each token as a quoted phrase to avoid FTS5 syntax errors on
-        characters like '-' or ':' and OR the tokens together.
+        Wraps the entire query as a quoted phrase to preserve word order and
+        avoid FTS5 syntax errors on characters like '-' or ':'.
         """
-        tokens = [t for t in ''.join(c if c.isalnum() else ' ' for c in query).split() if t]
-        if not tokens:
+        stripped = query.strip()
+        if not stripped:
             return ""
-        return " OR ".join(f'"{t}"' for t in tokens)
+        escaped = stripped.replace('"', '""')
+        return f'"{escaped}"'
 
     def search(self, query: str, n_results: int = 20, doc_ids: list = None) -> List[Dict]:
         """Return ranked chunks. Lower bm25() is better; we expose rank order.

@@ -37,7 +37,8 @@ export function SettingsPanel({ sessionId }: Props) {
     rag.use_rerank !== draft.use_rerank ||
     rag.citation_coverage_min !== draft.citation_coverage_min ||
     rag.hybrid_candidates !== draft.hybrid_candidates ||
-    rag.rerank_threshold !== draft.rerank_threshold
+    rag.rerank_threshold !== draft.rerank_threshold ||
+    rag.min_grounding !== draft.min_grounding
   )
 
   const saveRag = async () => {

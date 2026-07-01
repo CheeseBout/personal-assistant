@@ -8,18 +8,21 @@ to support undo.
 import os
 import shutil
 import time
+from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from ..core.config import settings
 from ..core.logging_config import logger
 
-# Workspace root: /data/workspace/
 WORKSPACE_ROOT = Path(settings.UPLOAD_DIR).parent / "workspace"
 WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
 
 SNAPSHOT_ROOT = WORKSPACE_ROOT / ".snapshots"
 SNAPSHOT_ROOT.mkdir(parents=True, exist_ok=True)
+
+MAX_LIST_ENTRIES = 200
+MAX_SNAPSHOTS_PER_FILE = 10
 
 
 def _resolve_path(rel_path: str) -> Path:
@@ -42,7 +45,25 @@ def _create_snapshot(path: Path, session_id: str) -> str:
     rel_name = str(path.relative_to(WORKSPACE_ROOT)).replace("/", "_").replace("\\", "_")
     snapshot_path = snapshot_dir / f"{rel_name}_{timestamp}"
     shutil.copy2(path, snapshot_path)
+    _cleanup_old_snapshots(session_id, rel_name)
     return str(snapshot_path.relative_to(WORKSPACE_ROOT))
+
+
+def _cleanup_old_snapshots(session_id: str, file_prefix: str):
+    """Keep only the newest MAX_SNAPSHOTS_PER_FILE snapshots per file."""
+    snapshot_dir = SNAPSHOT_ROOT / session_id
+    if not snapshot_dir.exists():
+        return
+    matching = sorted(
+        [f for f in snapshot_dir.iterdir() if f.is_file() and f.name.startswith(file_prefix)],
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+    for old in matching[MAX_SNAPSHOTS_PER_FILE:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
 
 
 def file_read(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
@@ -94,7 +115,7 @@ def file_write(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
 
 
 def file_list(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
-    """List directory contents."""
+    """List directory contents (capped at MAX_LIST_ENTRIES)."""
     rel_path = arguments.get("path", "")
     try:
         dir_path = _resolve_path(rel_path)
@@ -104,16 +125,24 @@ def file_list(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
             return {"error": "Path is not a directory", "path": rel_path}
 
         entries = []
+        truncated = False
         for item in sorted(dir_path.iterdir()):
             if item.name.startswith("."):
-                continue  # Skip hidden files/snapshots
+                continue
+            if len(entries) >= MAX_LIST_ENTRIES:
+                truncated = True
+                break
             entries.append({
                 "name": item.name,
                 "type": "directory" if item.is_dir() else "file",
                 "size": item.stat().st_size if item.is_file() else 0,
             })
 
-        return {"entries": entries, "path": rel_path, "count": len(entries)}
+        result = {"entries": entries, "path": rel_path, "count": len(entries)}
+        if truncated:
+            result["truncated"] = True
+            result["message"] = f"Listing capped at {MAX_LIST_ENTRIES} entries"
+        return result
     except ValueError as e:
         return {"error": str(e)}
     except Exception as e:

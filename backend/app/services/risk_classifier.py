@@ -6,6 +6,8 @@ a risk score and a permission decision recommendation (allow/ask/deny).
 
 import json
 import re
+import unicodedata
+import urllib.parse
 from typing import Dict, Any, List
 from enum import Enum
 
@@ -112,23 +114,29 @@ class RiskClassifier:
             # caught by deny patterns; treat as non-existing here.
             return False
 
+    @staticmethod
+    def _normalize_value(value: str) -> str:
+        """Normalize a string to defeat encoding-based bypass."""
+        decoded = urllib.parse.unquote(value)
+        return unicodedata.normalize("NFKC", decoded)
+
     def _check_deny_patterns(self, arguments: Dict[str, Any], matched_rules: List[str]) -> bool:
         """Check arguments against deny patterns.
 
         Path-based patterns are tested only against path-like fields so that a
         document's content mentioning "password" is not mistaken for a secret
         file path. Command-based patterns are tested against all text.
+        Values are normalized (URL-decoded, Unicode NFKC) before matching.
         """
-        # Path-based deny: only against fields that name a file/path.
         for key, value in arguments.items():
             if key in self.path_keys and isinstance(value, str):
+                normalized = self._normalize_value(value)
                 for pattern in self.path_deny_patterns:
-                    if re.search(pattern, value, re.IGNORECASE):
+                    if re.search(pattern, normalized, re.IGNORECASE):
                         matched_rules.append(f"deny_path:{pattern}")
                         return True
 
-        # Command-based deny: destructive shapes anywhere in the arguments.
-        all_text = json.dumps(arguments, ensure_ascii=False)
+        all_text = self._normalize_value(json.dumps(arguments, ensure_ascii=False))
         for pattern in self.command_deny_patterns:
             if re.search(pattern, all_text, re.IGNORECASE):
                 matched_rules.append(f"deny_command:{pattern}")

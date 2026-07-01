@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 from .embedding import EmbeddingService, VectorStore
@@ -36,7 +37,27 @@ class RAGEngine:
         chunks_data: List[Dict] = None,
         version: int = 1,
     ) -> Dict:
-        """Parse, chunk, embed and store document in both vector + keyword indexes."""
+        """Parse, chunk, embed and store document in both vector + keyword indexes.
+
+        The heavy work (parsing, embedding, vector/keyword insertion) runs in a
+        background thread via ``asyncio.to_thread`` so the event loop stays
+        responsive during large uploads.
+        """
+        return await asyncio.to_thread(
+            self.process_document_sync, doc_id, file_path, filename, chunks_data, version
+        )
+
+    def process_document_sync(
+        self,
+        doc_id: str,
+        file_path: str,
+        filename: str,
+        chunks_data: List[Dict] = None,
+        version: int = 1,
+    ) -> Dict:
+        """Synchronous variant for callers that already run outside the event loop
+        (e.g. the APScheduler-based auto-reindex service).
+        """
         if chunks_data is None:
             segments = DocumentParser.parse_segments(file_path)
             chunks_data = Chunker.chunk_segments(segments)

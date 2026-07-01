@@ -13,10 +13,9 @@ def _normalize(text: str) -> str:
     return re.sub(r'\s+', ' ', text.lower()).strip()
 
 
-# Citation markers the model appends, e.g. "[product_specs, chunk 1]" or
-# "[filename]". Stripped before grounding so the model's own source tags (which
-# never appear in the evidence text) don't count as unsupported tokens.
-_CITATION_MARKER = re.compile(r"\[[^\]]*\]")
+# Citation markers the model appends, e.g. "[1]", "[nguồn 1]", "[filename]".
+# Narrowed to avoid stripping code like arr[0] or data[i].
+_CITATION_MARKER = re.compile(r"\[\d+\]|\[[^\[\]\d]{2,60}\]")
 
 
 def _content_tokens(text: str) -> set:
@@ -109,8 +108,13 @@ def is_refusal(answer: str) -> bool:
 
 
 def verify_answer(answer: str, sources: List[Dict], chunks: List[Dict],
-                  min_citations: int, min_grounding: float = 0.3) -> Dict:
+                  min_citations: int, min_grounding: float = None) -> Dict:
     """Combine citation coverage + grounding into an accept/downgrade decision."""
+    from .settings_manager import SettingsManager
+    if min_grounding is None:
+        min_grounding = SettingsManager.get_instance().get_rag_settings().get(
+            "min_grounding", 0.3
+        )
     if is_refusal(answer):
         # An explicit refusal is always acceptable and needs no citations.
         return {"accepted": True, "refusal": True, "coverage": None, "grounding": None}

@@ -26,6 +26,7 @@ class Reranker:
             logger.info("Reranker loaded.")
         except Exception as e:
             logger.error(f"Failed to load reranker, falling back to fusion order: {e}")
+            logger.warning("Reranker model failed to load — falling back to fusion score")
             self.model = None
 
     @property

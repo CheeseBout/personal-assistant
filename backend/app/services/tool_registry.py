@@ -3,18 +3,14 @@
 Responsibilities:
 - Load tool metadata from database at startup.
 - Provide tool lookup by name.
-- Validate tool arguments against input schema (JSON Schema draft 4).
+- Validate tool arguments against input schema (JSON Schema).
 - List available tools with their risk levels.
 """
 
 import json
 from typing import Dict, Any, List, Optional
-import sqlite3
-from pathlib import Path
 
 from ..core.logging_config import logger
-
-DB_PATH = Path(__file__).parent.parent.parent.parent / "data" / "db" / "agent.db"
 
 
 class ToolRegistry:
@@ -40,36 +36,35 @@ class ToolRegistry:
         self._initialized = True
 
     def _load_tools(self):
-        """Fetch all enabled tools from the database."""
+        """Fetch all enabled tools from the database via SQLAlchemy."""
         try:
-            conn = sqlite3.connect(str(DB_PATH))
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM tools WHERE enabled = 1")
-            rows = cursor.fetchall()
-            conn.close()
-
-            self._tools = {}
-            for row in rows:
-                try:
-                    schema = json.loads(row["input_schema"]) if row["input_schema"] else {}
-                except json.JSONDecodeError:
-                    schema = {}
-                    logger.warning(f"Invalid JSON schema for tool {row['name']}, using empty schema")
-                self._tools[row["name"]] = {
-                    "id": row["id"],
-                    "name": row["name"],
-                    "description": row["description"] or "",
-                    "input_schema": schema,
-                    "risk_level": row["risk_level"],
-                    "requires_approval": bool(row["requires_approval"]),
-                    "rollback_type": row["rollback_type"],
-                    "rollback_supported": bool(row["rollback_supported"]),
-                    "logs_sensitive_args": bool(row["logs_sensitive_args"]),
-                    "enabled": bool(row["enabled"]),
-                    "created_at": row["created_at"],
-                }
-            logger.info(f"ToolRegistry loaded {len(self._tools)} tools")
+            from ..models.database import get_sync_db, Tool
+            db = next(get_sync_db())
+            try:
+                rows = db.query(Tool).filter(Tool.enabled == True).all()
+                self._tools = {}
+                for row in rows:
+                    try:
+                        schema = json.loads(row.input_schema) if row.input_schema else {}
+                    except (json.JSONDecodeError, TypeError):
+                        schema = {}
+                        logger.warning(f"Invalid JSON schema for tool {row.name}, using empty schema")
+                    self._tools[row.name] = {
+                        "id": row.id,
+                        "name": row.name,
+                        "description": row.description or "",
+                        "input_schema": schema,
+                        "risk_level": row.risk_level,
+                        "requires_approval": bool(row.requires_approval),
+                        "rollback_type": row.rollback_type,
+                        "rollback_supported": bool(row.rollback_supported),
+                        "logs_sensitive_args": bool(row.logs_sensitive_args),
+                        "enabled": bool(row.enabled),
+                        "created_at": str(row.created_at) if row.created_at else None,
+                    }
+                logger.info(f"ToolRegistry loaded {len(self._tools)} tools")
+            finally:
+                db.close()
         except Exception as e:
             logger.error(f"Failed to load tools from database: {e}")
             self._tools = {}
@@ -88,8 +83,19 @@ class ToolRegistry:
 
         schema = tool["input_schema"]
         if not schema:
-            return []  # No schema to validate against
+            return []
 
+        try:
+            import jsonschema
+            jsonschema.validate(arguments, schema)
+            return []
+        except ImportError:
+            return self._validate_fallback(arguments, schema)
+        except jsonschema.ValidationError as e:
+            return [e.message]
+
+    def _validate_fallback(self, arguments: Dict[str, Any], schema: Dict) -> List[str]:
+        """Fallback validation when jsonschema is not installed."""
         errors = []
         required = schema.get("required", [])
         properties = schema.get("properties", {})
@@ -102,19 +108,13 @@ class ToolRegistry:
             if key in properties:
                 expected_type = properties[key].get("type")
                 if expected_type:
-                    if expected_type == "string" and not isinstance(value, str):
-                        errors.append(f"Field '{key}' must be a string")
-                    elif expected_type == "integer" and not isinstance(value, int):
-                        errors.append(f"Field '{key}' must be an integer")
-                    elif expected_type == "number" and not isinstance(value, (int, float)):
-                        errors.append(f"Field '{key}' must be a number")
-                    elif expected_type == "boolean" and not isinstance(value, bool):
-                        errors.append(f"Field '{key}' must be a boolean")
-                    elif expected_type == "object" and not isinstance(value, dict):
-                        errors.append(f"Field '{key}' must be an object")
-                    elif expected_type == "array" and not isinstance(value, list):
-                        errors.append(f"Field '{key}' must be an array")
-
+                    type_checks = {
+                        "string": str, "integer": int, "number": (int, float),
+                        "boolean": bool, "object": dict, "array": list,
+                    }
+                    expected = type_checks.get(expected_type)
+                    if expected and not isinstance(value, expected):
+                        errors.append(f"Field '{key}' must be a {expected_type}")
         return errors
 
     def requires_approval(self, tool_name: str) -> bool:

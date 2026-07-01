@@ -3,6 +3,7 @@ from typing import Dict, Any
 import time
 
 from ..services.rag_singleton import get_rag_engine
+from ..services.reranker import get_reranker
 from ..services.settings_manager import SettingsManager
 from ..core.config import settings
 
@@ -79,4 +80,5 @@ async def debug_settings() -> Dict[str, Any]:
         "rag_max_results": rag_cfg.get("max_results", settings.RAG_MAX_RESULTS),
         "citation_coverage_min": rag_cfg.get("citation_coverage_min", settings.CITATION_COVERAGE_MIN),
         "vector_store_path": settings.VECTOR_STORE_PATH,
+        "reranker_available": get_reranker().available,
     }

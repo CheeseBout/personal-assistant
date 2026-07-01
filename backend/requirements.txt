@@ -30,4 +30,5 @@ pygetwindow==0.0.9
 pywinauto==0.6.8
 pyautogui==0.9.54
 pytest==7.4.4
+jsonschema>=4.0
 
