@@ -91,6 +91,7 @@ class AuditLog(Base):
     actor = Column(String)  # user, agent, system
     action = Column(String)
     details = Column(JSON, default={})
+    prev_hash = Column(String, nullable=True)
 
 
 class DocumentMetadata(Base):
@@ -407,6 +408,12 @@ def _migrate_schema():
             for name, ddl_type in columns:
                 if name not in present:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}"))
+
+        # Audit log integrity hash chain (Commit 26)
+        try:
+            conn.execute(text("ALTER TABLE audit_logs ADD COLUMN prev_hash TEXT"))
+        except Exception:
+            pass
 
 
 def init_db():

@@ -14,7 +14,7 @@ Policy precedence: deny > ask_strong > ask > allow
 
 import uuid
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -25,7 +25,8 @@ from .episodic_memory import EpisodicMemory
 from .short_term_memory import ShortTermMemoryManager
 from ..core.logging_config import logger
 from ..core.redaction import redact_value
-from ..models.database import get_sync_db, ApprovalRequest, AuditLog
+from ..models.database import get_sync_db, ApprovalRequest
+from ..services.audit_integrity import create_audit_entry
 
 
 class PermissionEngine:
@@ -82,13 +83,13 @@ class PermissionEngine:
                     details={"tool": tool_name, "arguments": arguments, "reason": explanation, "rules": matched_rules},
                     db=db
                 )
-                db.add(AuditLog(
-                    id=str(uuid.uuid4()),
+                create_audit_entry(
                     session_id=session_id,
                     actor="permission_engine",
                     action="tool_denied",
-                    details={"tool": tool_name, "risk_level": risk_level, "rules": matched_rules}
-                ))
+                    details={"tool": tool_name, "risk_level": risk_level, "rules": matched_rules},
+                    db=db,
+                )
                 db.commit()
                 return {
                     "decision": "deny",
@@ -102,6 +103,9 @@ class PermissionEngine:
             decision = self._decide_action(risk_level, tool_meta["requires_approval"], classification["requires_approval"])
 
             if decision in ("ask", "ask_strong"):
+                # Expire stale approvals before creating a new one
+                self.cleanup_expired_approvals(db)
+
                 # Create approval request
                 approval_id = str(uuid.uuid4())
                 approval = ApprovalRequest(
@@ -123,13 +127,13 @@ class PermissionEngine:
                     details={"tool": tool_name, "approval_id": approval_id, "risk_level": risk_level},
                     db=db
                 )
-                db.add(AuditLog(
-                    id=str(uuid.uuid4()),
+                create_audit_entry(
                     session_id=session_id,
                     actor="permission_engine",
                     action="tool_pending_approval",
-                    details={"tool": tool_name, "approval_id": approval_id, "risk_level": risk_level}
-                ))
+                    details={"tool": tool_name, "approval_id": approval_id, "risk_level": risk_level},
+                    db=db,
+                )
                 db.commit()
 
                 return {
@@ -149,13 +153,13 @@ class PermissionEngine:
                     details={"tool": tool_name, "risk_level": risk_level},
                     db=db
                 )
-                db.add(AuditLog(
-                    id=str(uuid.uuid4()),
+                create_audit_entry(
                     session_id=session_id,
                     actor="permission_engine",
                     action="tool_approved_auto",
-                    details={"tool": tool_name, "risk_level": risk_level}
-                ))
+                    details={"tool": tool_name, "risk_level": risk_level},
+                    db=db,
+                )
                 db.commit()
                 return {
                     "decision": "allow",
@@ -223,3 +227,19 @@ class PermissionEngine:
                 "requested_at": a.requested_at.isoformat() if a.requested_at else None,
             })
         return out
+
+    def cleanup_expired_approvals(self, db: Session) -> int:
+        """Expire stale pending approvals older than APPROVAL_TIMEOUT_MINUTES."""
+        from ..core.config import settings
+        cutoff = datetime.utcnow() - timedelta(minutes=settings.APPROVAL_TIMEOUT_MINUTES)
+        stmt = select(ApprovalRequest).where(
+            ApprovalRequest.status == "pending",
+            ApprovalRequest.requested_at < cutoff,
+        )
+        expired = db.execute(stmt).scalars().all()
+        for approval in expired:
+            approval.status = "timeout"
+            approval.decided_at = datetime.utcnow()
+        if expired:
+            db.commit()
+        return len(expired)

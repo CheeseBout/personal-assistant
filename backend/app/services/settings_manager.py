@@ -26,7 +26,6 @@ from ..models.database import AppSetting, get_sync_db
 # Whitelist of user-editable RAG/retrieval settings. Each entry maps the
 # external key to a (default-from-static-settings attribute, type-coercion fn).
 RAG_KEYS: Dict[str, tuple[str, type]] = {
-    "threshold": ("RERANK_THRESHOLD", float),
     "min_results": ("RAG_MIN_RESULTS", int),
     "max_results": ("RAG_MAX_RESULTS", int),
     "use_rerank": ("USE_RERANK", bool),
@@ -34,6 +33,7 @@ RAG_KEYS: Dict[str, tuple[str, type]] = {
     "hybrid_candidates": ("HYBRID_CANDIDATES", int),
     "rerank_threshold": ("RERANK_THRESHOLD", float),
     "rrf_k": ("RRF_K", int),
+    "min_grounding": ("MIN_GROUNDING", float),
 }
 
 
@@ -125,14 +125,6 @@ class SettingsManager:
 
         with self._lock:
             self._cache.update(valid_patch)
-        # Mirror the override onto the static settings object so legacy code
-        # that reads settings.RAG_MIN_RESULTS directly picks up the new value.
-        for k, v in valid_patch.items():
-            attr = RAG_KEYS[k][0]
-            try:
-                setattr(static_settings, attr, v)
-            except Exception:
-                pass
         return self.get_rag_settings()
 
     def known_keys(self) -> Iterable[str]:

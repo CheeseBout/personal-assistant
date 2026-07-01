@@ -1,4 +1,4 @@
-﻿# Database utilities - async operations
+# Database utilities - async operations
 
 from typing import AsyncGenerator
 

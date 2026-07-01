@@ -60,6 +60,8 @@ async def startup_event():
     from .services.scheduler import SchedulerManager
     SchedulerManager.get_instance().start()
     logger.info("Database initialized, ToolRegistry loaded, RAG engine ready")
+    from pathlib import Path
+    logger.info(f"Vector store path: {Path(settings.VECTOR_STORE_PATH).resolve()}")
 
 
 @app.on_event("shutdown")

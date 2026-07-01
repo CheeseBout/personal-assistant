@@ -1,20 +1,28 @@
 import os
 import json
+import time
+import logging
 from typing import List, Dict, Any, Optional, AsyncIterator
 
 from pydantic import BaseModel
+
+_logger = logging.getLogger(__name__)
+
+_MAX_RETRIES = 3
 
 class Message(BaseModel):
     role: str
     content: str
 
 class ToolCall(BaseModel):
+    id: Optional[str] = None
     name: str
     arguments: Dict[str, Any]
 
 class LLMResponse(BaseModel):
     content: str
     tool_calls: List[ToolCall] = []
+    usage: Optional[Dict[str, int]] = None
 
 class LLMProvider:
     def __init__(self, api_key: str = None, base_url: str = None, model: str = "gpt-4o"):
@@ -47,31 +55,53 @@ class LLMProvider:
         tools: List[Dict] = None,
         temperature: float = 0.7
     ) -> LLMResponse:
-        """Synchronous LLM call with tools (used by the agent loop)."""
-        formatted_messages = [
-            {"role": m["role"], "content": m["content"]} for m in messages
-        ]
-        try:
-            response = self._get_sync_client().chat.completions.create(
-                model=self.model,
-                messages=formatted_messages,
-                tools=tools or None,
-                tool_choice="auto" if tools else None,
-                temperature=temperature,
-            )
-            message = response.choices[0].message
-            tool_calls = []
-            if message.tool_calls:
-                for tc in message.tool_calls:
-                    try:
-                        arguments = json.loads(tc.function.arguments)
-                    except json.JSONDecodeError:
-                        arguments = {}
-                    tool_calls.append(ToolCall(name=tc.function.name, arguments=arguments))
-            return LLMResponse(content=message.content or "", tool_calls=tool_calls)
-        except Exception as e:
-            print(f"LLM sync API error: {e}")
-            raise
+        """Synchronous LLM call with tools, with retry for transient errors."""
+        formatted_messages = []
+        for m in messages:
+            fm = {"role": m["role"], "content": m.get("content") or ""}
+            if m.get("tool_calls"):
+                fm["tool_calls"] = m["tool_calls"]
+            if m.get("tool_call_id"):
+                fm["tool_call_id"] = m["tool_call_id"]
+            formatted_messages.append(fm)
+
+        from openai import RateLimitError, APITimeoutError, APIConnectionError
+        transient_errors = (RateLimitError, APITimeoutError, APIConnectionError)
+
+        for attempt in range(_MAX_RETRIES):
+            try:
+                response = self._get_sync_client().chat.completions.create(
+                    model=self.model,
+                    messages=formatted_messages,
+                    tools=tools or None,
+                    tool_choice="auto" if tools else None,
+                    temperature=temperature,
+                )
+                message = response.choices[0].message
+                tool_calls = []
+                if message.tool_calls:
+                    for tc in message.tool_calls:
+                        try:
+                            arguments = json.loads(tc.function.arguments)
+                        except json.JSONDecodeError:
+                            arguments = {}
+                        tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=arguments))
+                usage = None
+                if response.usage:
+                    usage = {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                    }
+                return LLMResponse(content=message.content or "", tool_calls=tool_calls, usage=usage)
+            except transient_errors as e:
+                if attempt == _MAX_RETRIES - 1:
+                    raise
+                wait = 2 ** attempt
+                _logger.warning(f"LLM transient error (attempt {attempt + 1}/{_MAX_RETRIES}): {e}, retrying in {wait}s")
+                time.sleep(wait)
+            except Exception as e:
+                _logger.error(f"LLM sync API error: {e}")
+                raise
 
     async def chat_async(
         self,
@@ -121,6 +151,7 @@ class LLMProvider:
                     except json.JSONDecodeError:
                         arguments = {}
                     tool_calls.append(ToolCall(
+                        id=tc.id,
                         name=tc.function.name,
                         arguments=arguments
                     ))

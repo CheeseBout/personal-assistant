@@ -9,6 +9,8 @@ episodic memory.
 
 from typing import Dict, Any
 
+from sqlalchemy import select
+
 from .tool_registry import ToolRegistry
 from .permission_engine import PermissionEngine
 from .episodic_memory import EpisodicMemory
@@ -42,6 +44,7 @@ from .desktop_control_tools import (
 )
 from ..core.logging_config import logger
 from ..core.redaction import redact_arguments
+from ..models.database import ApprovalRequest
 
 # Mapping tool name -> executor function
 TOOL_EXECUTORS = {
@@ -191,8 +194,27 @@ class ToolExecutor:
             return {"status": "error", "tool": tool_name, "error": str(e)}
 
     def dispatch_after_approval(self, tool_name: str, arguments: Dict[str, Any],
-                                session_id: str, db=None) -> Dict[str, Any]:
-        """Execute tool after user approval. Skips permission re-check."""
+                                session_id: str, db=None,
+                                approval_id: str = None) -> Dict[str, Any]:
+        """Execute tool after user approval. Verifies approval row before executing."""
+
+        # TOCTOU guard: verify the approval row is still valid
+        if approval_id and db:
+            stmt = select(ApprovalRequest).where(
+                ApprovalRequest.id == approval_id,
+                ApprovalRequest.status == "approved",
+                ApprovalRequest.session_id == session_id,
+                ApprovalRequest.tool_name == tool_name,
+            )
+            approval = db.execute(stmt).scalar_one_or_none()
+            if not approval:
+                return {"status": "error", "error": "Invalid or expired approval"}
+
+        # Verify the tool is still registered/enabled
+        tool_meta = self.registry.get_tool(tool_name)
+        if not tool_meta:
+            return {"status": "error", "error": f"Tool '{tool_name}' is no longer available"}
+
         executor = TOOL_EXECUTORS.get(tool_name)
         if not executor:
             return {"status": "error", "error": f"Unknown tool: {tool_name}"}

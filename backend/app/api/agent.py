@@ -1,5 +1,6 @@
 """Agent and approval API endpoints."""
 
+import asyncio
 import json
 import uuid
 from datetime import datetime
@@ -88,7 +89,7 @@ async def agent_chat(
                 from .chat import chat as rag_chat
                 return await rag_chat({"message": message, "session_id": session_id}, db=db)
 
-            result = agent.run(session_id, message, db=sync_db)
+            result = await asyncio.to_thread(agent.run, session_id, message, sync_db)
             result["session_id"] = session_id
             return result
         finally:
@@ -173,7 +174,7 @@ async def continue_after_approval(
         if not approval or approval.status != expected_status:
             raise HTTPException(status_code=409, detail=f"Approval must be {expected_status} before continuing")
 
-        result = agent.run_after_approval(session_id, sync_db, approved=approved)
+        result = await asyncio.to_thread(agent.run_after_approval, session_id, sync_db, approved)
         result["session_id"] = session_id
         result["approval_id"] = approval_id
         return result

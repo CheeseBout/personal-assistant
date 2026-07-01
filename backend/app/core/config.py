@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///../data/db/agent.db"
 
     # Vector Store
-    VECTOR_STORE_PATH: str = "../data/embeddings"
+    VECTOR_STORE_PATH: str = "../data/embeddings/chroma"
 
     # File Storage
     UPLOAD_DIR: str = "../data/uploads"
@@ -108,10 +108,13 @@ class Settings(BaseSettings):
 
     # Phase 2 - Grounding / citation
     CITATION_COVERAGE_MIN: int = 1
+    MIN_GROUNDING: float = 0.3
 
-    # Agent Core - Intent classifier
+    # Agent Core settings
     INTENT_CONFIDENCE_MIN: float = 0.6
     INTENT_USE_LLM_FALLBACK: bool = True
+    AGENT_MAX_HISTORY: int = 30
+    AGENT_TEMPERATURE: float = 0.1
 
     # Phase 4 - Browser automation (Playwright)
     BROWSER_HEADLESS: bool = False               # headed by default for observability + manual 2FA/CAPTCHA
@@ -181,8 +184,11 @@ class Settings(BaseSettings):
         "null",
     ]
 
+    # Approval / HITL timeout
+    APPROVAL_TIMEOUT_MINUTES: int = 30
+
     # Misc / safety
-    DEBUG_ENDPOINTS_ENABLED: bool = True   # disable to hide /api/debug/* in prod-like deploys
+    DEBUG_ENDPOINTS_ENABLED: bool = False
 
     class Config:
         env_file = ".env"

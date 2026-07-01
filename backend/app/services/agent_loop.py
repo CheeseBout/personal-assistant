@@ -15,7 +15,9 @@ The agent loop:
 The loop is deterministic and fully audited via episodic memory.
 """
 
+import json
 import uuid
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
 from sqlalchemy.orm import Session
@@ -27,7 +29,10 @@ from ..services.short_term_memory import ShortTermMemoryManager
 from ..services.episodic_memory import EpisodicMemory
 from ..services.long_term_memory import LongTermMemoryManager
 from ..core.logging_config import logger
-from ..models.database import get_sync_db, Message as MessageModel, AuditLog
+from ..core.config import settings
+from ..core.redaction import redact_value
+from ..models.database import get_sync_db, Message as MessageModel
+from ..services.audit_integrity import create_audit_entry
 
 
 # Trusted system instruction. This is the only authoritative instruction source.
@@ -129,13 +134,13 @@ class AgentLoop:
                 details={"error": str(e)},
                 db=db
             )
-            db.add(AuditLog(
-                id=str(uuid.uuid4()),
+            create_audit_entry(
                 session_id=session_id,
                 actor="agent_loop",
                 action="error",
-                details={"error": str(e)}
-            ))
+                details={"error": str(e)},
+                db=db,
+            )
             db.commit()
             return {
                 "response": f"Xin lỗi, đã xảy ra lỗi: {str(e)}",
@@ -154,6 +159,7 @@ class AgentLoop:
         """
         tool_calls_made = tool_calls_made if tool_calls_made is not None else []
         iterations = start_iteration
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0}
 
         while iterations < self.max_iterations:
             iterations += 1
@@ -162,8 +168,12 @@ class AgentLoop:
             response = self.llm.chat(
                 messages=messages,
                 tools=self._get_tools_schema(),
-                temperature=0.7
+                temperature=settings.AGENT_TEMPERATURE
             )
+
+            if response.usage:
+                total_usage["prompt_tokens"] += response.usage.get("prompt_tokens", 0)
+                total_usage["completion_tokens"] += response.usage.get("completion_tokens", 0)
 
             # If no tool calls, we have final response
             if not response.tool_calls:
@@ -188,18 +198,41 @@ class AgentLoop:
                     "status": "completed",
                     "iterations": iterations,
                     "tool_calls": tool_calls_made,
+                    "token_usage": total_usage,
                 }
 
-            # Process tool calls (can be multiple; handle sequentially for now)
+            # Append the assistant message with tool_calls metadata
+            assistant_msg = {
+                "role": "assistant",
+                "content": response.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                        },
+                    }
+                    for tc in response.tool_calls
+                ],
+            }
+            messages.append(assistant_msg)
+
+            # Process tool calls sequentially
             for tc in response.tool_calls:
                 tool_name = tc.name
+                tool_call_id = tc.id
                 arguments = tc.arguments
 
                 # Validate arguments
                 validation_errors = self.registry.validate_arguments(tool_name, arguments)
                 if validation_errors:
-                    err_msg = {"error": f"Invalid arguments: {', '.join(validation_errors)}"}
-                    messages.append({"role": "assistant", "content": f"Tool call error: {err_msg}"})
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": f"Validation error: {', '.join(validation_errors)}",
+                    })
                     continue
 
                 # Execute tool (may return pending approval)
@@ -213,13 +246,25 @@ class AgentLoop:
                 })
 
                 if exec_result["status"] == "pending_approval":
-                    # HITL: persist state so we can resume after approval, then return
+                    # Redact tool-role message content before persisting
+                    redacted_messages = []
+                    for m in messages:
+                        if m.get("role") == "tool":
+                            redacted_messages.append({**m, "content": redact_value(m.get("content", ""))})
+                        else:
+                            redacted_messages.append(m)
+
                     self.stm.set(session_id, "pending_agent_state", {
-                        "messages": messages,
+                        "messages": redacted_messages,
                         "tool_calls_made": tool_calls_made,
                         "iterations": iterations,
-                        "pending_tool": {"tool": tool_name, "arguments": arguments},
+                        "pending_tool": {
+                            "tool": tool_name,
+                            "arguments": arguments,
+                            "tool_call_id": tool_call_id,
+                        },
                         "approval_id": exec_result["approval_id"],
+                        "saved_at": datetime.utcnow().isoformat(),
                     }, db=db)
                     db.commit()
                     return {
@@ -228,22 +273,26 @@ class AgentLoop:
                         "approval_id": exec_result["approval_id"],
                         "iterations": iterations,
                         "tool_calls": tool_calls_made,
+                        "token_usage": total_usage,
                     }
                 elif exec_result["status"] == "denied":
                     messages.append({
-                        "role": "assistant",
-                        "content": f"Action denied: {exec_result.get('reason', 'No reason given')}"
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": f"Action denied: {exec_result.get('reason', 'No reason given')}",
                     })
                 elif exec_result["status"] == "error":
                     messages.append({
-                        "role": "assistant",
-                        "content": f"Tool error: {exec_result.get('error', 'Unknown error')}"
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": f"Tool error: {exec_result.get('error', 'Unknown error')}",
                     })
                 else:
                     result_str = str(exec_result.get("result", {}))
                     messages.append({
-                        "role": "assistant",
-                        "content": _wrap_tool_result(tool_name, result_str)
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": _wrap_tool_result(tool_name, result_str),
                     })
 
             db.commit()
@@ -256,19 +305,20 @@ class AgentLoop:
             details={"iterations": iterations},
             db=db
         )
-        db.add(AuditLog(
-            id=str(uuid.uuid4()),
+        create_audit_entry(
             session_id=session_id,
             actor="agent_loop",
             action="max_iterations",
-            details={"iterations": iterations}
-        ))
+            details={"iterations": iterations},
+            db=db,
+        )
         db.commit()
         return {
             "response": "Đã đạt giới hạn số bước xử lý. Vui lòng thử lại với câu hỏi đơn giản hơn.",
             "status": "error",
             "iterations": iterations,
             "tool_calls": tool_calls_made,
+            "token_usage": total_usage,
         }
 
     def run_after_approval(self, session_id: str, db: Session,
@@ -287,23 +337,32 @@ class AgentLoop:
                 "tool_calls": [],
             }
 
+        # Check if the saved state has expired
+        from ..core.config import settings as app_settings
+        saved_at_str = state.get("saved_at")
+        if saved_at_str:
+            saved_at = datetime.fromisoformat(saved_at_str)
+            if datetime.utcnow() - saved_at > timedelta(minutes=app_settings.APPROVAL_TIMEOUT_MINUTES):
+                self.stm.delete(session_id, "pending_agent_state", db=db)
+                return {"response": "Yêu cầu đã hết hạn.", "status": "error", "tool_calls": []}
+
         messages = state.get("messages", [])
         tool_calls_made = state.get("tool_calls_made", [])
         iterations = state.get("iterations", 0)
         pending_tool = state.get("pending_tool", {})
         tool_name = pending_tool.get("tool")
         arguments = pending_tool.get("arguments", {})
+        tool_call_id = pending_tool.get("tool_call_id")
 
         # Consume the pending state so it can't be replayed
         self.stm.delete(session_id, "pending_agent_state", db=db)
 
         if not approved:
-            # User denied: tell the model and let it continue without the tool
             messages.append({
-                "role": "assistant",
-                "content": f"User denied action: {tool_name}. Proceed without it."
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": f"User denied action: {tool_name}. Proceed without it.",
             })
-            # Mark the matching pending entry as denied
             for entry in tool_calls_made:
                 if entry.get("tool") == tool_name and entry.get("status") == "pending_approval":
                     entry["status"] = "denied"
@@ -311,7 +370,10 @@ class AgentLoop:
                                   tool_calls_made=tool_calls_made, start_iteration=iterations)
 
         # Approved: execute the tool, skipping the permission re-check
-        exec_result = self.executor.dispatch_after_approval(tool_name, arguments, session_id, db=db)
+        exec_result = self.executor.dispatch_after_approval(
+            tool_name, arguments, session_id, db=db,
+            approval_id=state.get("approval_id"),
+        )
 
         # Update the pending entry with the real result
         for entry in tool_calls_made:
@@ -322,15 +384,18 @@ class AgentLoop:
 
         result_str = str(exec_result.get("result", exec_result))
         messages.append({
-            "role": "assistant",
-            "content": _wrap_tool_result(tool_name, result_str)
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": _wrap_tool_result(tool_name, result_str),
         })
 
         return self._run_loop(session_id, messages, db,
                               tool_calls_made=tool_calls_made, start_iteration=iterations)
 
-    def _get_history(self, session_id: str, db: Session, limit: int = 20) -> List[Dict]:
+    def _get_history(self, session_id: str, db: Session, limit: int = None) -> List[Dict]:
         """Get conversation history for context."""
+        if limit is None:
+            limit = settings.AGENT_MAX_HISTORY
         stmt = MessageModel.__table__.select().where(
             MessageModel.session_id == session_id
         ).order_by(MessageModel.created_at).limit(limit)
@@ -344,8 +409,8 @@ class AgentLoop:
     def _build_initial_messages(self, history: List[Dict], current_input: str) -> List[Dict]:
         """Build initial message list with system prompt, history and current input."""
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        # Include recent history (exclude current since we'll add it separately)
-        for msg in history[-10:]:
+        max_hist = settings.AGENT_MAX_HISTORY
+        for msg in history[-max_hist:]:
             if msg["role"] in ["user", "assistant"]:
                 messages.append(msg)
         # Add current user message if not already in history
