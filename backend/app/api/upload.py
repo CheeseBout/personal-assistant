@@ -3,7 +3,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+import io
 import uuid
+import zipfile
 
 from ..models.async_db import get_async_db, Document, DocumentVersion, Chunk, DocumentMetadata, AuditLog
 from ..services.document import DocumentParser, Chunker
@@ -13,12 +15,17 @@ from ..core.logging_config import logger
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
+# Maximum total uncompressed size for DOCX/XLSX zip bombs (200 MB).
+MAX_UNCOMPRESSED_SIZE = 200 * 1024 * 1024
+
 
 def _matches_magic(ext: str, content: bytes) -> bool:
     """Check that the file's leading bytes match what the extension claims.
 
     Catches the simplest case of someone uploading malware renamed as .pdf.
     Plain-text formats (.txt, .md) are accepted as-is — no reliable signature.
+    For DOCX/XLSX, also validates the internal OPC structure and rejects
+    zip bombs whose total uncompressed size exceeds MAX_UNCOMPRESSED_SIZE.
     """
     if not content:
         return False
@@ -26,7 +33,21 @@ def _matches_magic(ext: str, content: bytes) -> bool:
         return content[:5] == b"%PDF-"
     if ext in (".docx", ".xlsx"):
         # Both are zip-based OPC containers
-        return content[:4] == b"PK\x03\x04"
+        if content[:4] != b"PK\x03\x04":
+            return False
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                names = zf.namelist()
+                if ext == ".docx" and "word/document.xml" not in names:
+                    return False
+                if ext == ".xlsx" and "xl/workbook.xml" not in names:
+                    return False
+                total_uncompressed = sum(info.file_size for info in zf.infolist())
+                if total_uncompressed > MAX_UNCOMPRESSED_SIZE:
+                    return False
+        except zipfile.BadZipFile:
+            return False
+        return True
     if ext in (".txt", ".md"):
         # No signature — best we can do is reject obvious binaries (NUL bytes
         # are very rare in legitimate text files).
@@ -106,8 +127,9 @@ async def upload_file(
             detail=f"File content does not match its {file_ext} extension",
         )
 
-    # Check for an existing active document with the same filename (versioning)
-    existing_stmt = select(Document).where(Document.filename == file.filename, Document.is_active == True)
+    # Check for an existing document with the same filename (versioning).
+    # Deleted documents are hard-deleted, so any remaining row is active.
+    existing_stmt = select(Document).where(Document.filename == file.filename)
     existing = (await db.execute(existing_stmt)).scalar_one_or_none()
 
     upload_dir = Path(settings.UPLOAD_DIR)
@@ -184,12 +206,19 @@ async def _create_new_version(
     new_hash: str,
     upload_dir: Path,
 ) -> Dict[str, Any]:
-    """Create and index a new version of an existing document (keep old chunks for audit)."""
+    """Create and index a new version of an existing document.
+
+    Uses an atomic "add-new-then-delete-old" strategy: new version data is
+    inserted alongside the old; the old version is only removed after all
+    new inserts succeed.  On failure, partially-added new vectors are cleaned
+    up and the old version remains intact.
+    """
     # Determine next version number
     max_v = (await db.execute(
         select(func.max(DocumentVersion.version)).where(DocumentVersion.document_id == doc.id)
     )).scalar() or 1
     new_version = max_v + 1
+    old_version = max_v
 
     file_path = upload_dir / f"{doc.id}_v{new_version}_{doc.filename}"
     try:
@@ -198,11 +227,10 @@ async def _create_new_version(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
 
-    try:
-        # Remove previous version vectors/keywords from active retrieval
-        get_rag_engine().vector_store.delete_by_doc_id(doc.id)
-        get_rag_engine().keyword_index.delete_by_doc_id(doc.id)
+    engine = get_rag_engine()
 
+    try:
+        # --- Phase 1: add new version alongside old ---
         # Update document head pointer
         doc.file_path = str(file_path)
         doc.file_hash = new_hash
@@ -211,6 +239,16 @@ async def _create_new_version(
         db.add(doc)
 
         result = await _index_new_version(db, doc, str(file_path), version=new_version)
+
+        # --- Phase 2: new version fully indexed — safe to drop old ---
+        try:
+            engine.vector_store.delete_by_version(doc.id, old_version)
+        except Exception as e:
+            logger.warning(f"new-version: failed to delete old vectors v{old_version} for {doc.id}: {e}")
+        try:
+            engine.keyword_index.delete_by_version(doc.id, old_version)
+        except Exception as e:
+            logger.warning(f"new-version: failed to delete old keywords v{old_version} for {doc.id}: {e}")
 
         db.add(AuditLog(
             id=str(uuid.uuid4()), actor="user", action="document_reindexed",
@@ -224,11 +262,29 @@ async def _create_new_version(
         }
     except HTTPException:
         await db.rollback()
+        # Rollback: remove any partially-added new-version vectors/keywords
+        try:
+            engine.vector_store.delete_by_version(doc.id, new_version)
+        except Exception:
+            pass
+        try:
+            engine.keyword_index.delete_by_version(doc.id, new_version)
+        except Exception:
+            pass
         if file_path.exists():
             file_path.unlink()
         raise
     except Exception as e:
         await db.rollback()
+        # Rollback: remove any partially-added new-version vectors/keywords
+        try:
+            engine.vector_store.delete_by_version(doc.id, new_version)
+        except Exception:
+            pass
+        try:
+            engine.keyword_index.delete_by_version(doc.id, new_version)
+        except Exception:
+            pass
         if file_path.exists():
             file_path.unlink()
         logger.error(f"Re-index (new version) failed: {e}")
@@ -327,8 +383,7 @@ async def delete_document(doc_id: str, db: AsyncSession = Depends(get_async_db))
         await db.execute(delete(DocumentMetadata).where(DocumentMetadata.document_id == doc_id))
         await db.execute(delete(DocumentVersion).where(DocumentVersion.document_id == doc_id))
 
-        doc.is_active = False
-        db.add(doc)
+        await db.delete(doc)
 
         db.add(AuditLog(
             id=str(uuid.uuid4()), actor="user", action="document_deleted",
