@@ -3,6 +3,7 @@ import type {
   AgentResponse,
   AgentSettings,
   AuditItem,
+  BrowserSettings,
   BrowserState,
   ChatMessage,
   ChatSessionItem,
@@ -289,6 +290,14 @@ export const api = {
 
   updateRagSettings(patch: Partial<RagSettings>): Promise<RagSettings> {
     return req('/api/rag/settings', { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+
+  browserSettings(): Promise<BrowserSettings> {
+    return req('/api/browser/settings')
+  },
+
+  updateBrowserSettings(patch: Partial<BrowserSettings>): Promise<BrowserSettings> {
+    return req('/api/browser/settings', { method: 'PATCH', body: JSON.stringify(patch) })
   },
 
   // --- News + Scheduler (Phase 8) ---

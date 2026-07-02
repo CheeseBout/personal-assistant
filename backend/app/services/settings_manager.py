@@ -36,6 +36,13 @@ RAG_KEYS: Dict[str, tuple[str, type]] = {
     "min_grounding": ("MIN_GROUNDING", float),
 }
 
+# Whitelist of user-editable browser settings (domain guard / SSRF toggle).
+BROWSER_KEYS: Dict[str, tuple[str, type]] = {
+    "domain_allowlist": ("BROWSER_DOMAIN_ALLOWLIST", str),
+    "domain_blocklist": ("BROWSER_DOMAIN_BLOCKLIST", str),
+    "block_private_ips": ("BROWSER_BLOCK_PRIVATE_IPS", bool),
+}
+
 
 def _coerce(value: Any, t: type) -> Any:
     if t is bool:
@@ -129,3 +136,47 @@ class SettingsManager:
 
     def known_keys(self) -> Iterable[str]:
         return RAG_KEYS.keys()
+
+    # --- browser settings (domain guard / SSRF) ------------------------------------
+
+    def get_browser_settings(self) -> Dict[str, Any]:
+        """Return effective values for every browser key, applying overrides."""
+        self._ensure_loaded()
+        out: Dict[str, Any] = {}
+        for ext_key, (attr, t) in BROWSER_KEYS.items():
+            if ext_key in self._cache:
+                out[ext_key] = _coerce(self._cache[ext_key], t)
+            else:
+                out[ext_key] = _coerce(getattr(static_settings, attr), t)
+        return out
+
+    def update_browser_settings(self, patch: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist a subset of browser keys and return the effective values."""
+        valid_patch: Dict[str, Any] = {}
+        for k, v in patch.items():
+            if k not in BROWSER_KEYS:
+                continue
+            _, t = BROWSER_KEYS[k]
+            try:
+                valid_patch[k] = _coerce(v, t)
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid value for {k}: {v!r}")
+
+        if not valid_patch:
+            return self.get_browser_settings()
+
+        db: Session = next(get_sync_db())
+        try:
+            for k, v in valid_patch.items():
+                row = db.query(AppSetting).filter(AppSetting.key == k).one_or_none()
+                if row is None:
+                    db.add(AppSetting(key=k, value_json=v))
+                else:
+                    row.value_json = v
+            db.commit()
+        finally:
+            db.close()
+
+        with self._lock:
+            self._cache.update(valid_patch)
+        return self.get_browser_settings()

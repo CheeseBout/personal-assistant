@@ -16,7 +16,10 @@ Design (per Phase 4 plan):
 
 import asyncio
 import base64
+import ipaddress
+import socket
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Any, Optional
 from urllib.parse import urlparse
@@ -68,7 +71,7 @@ class BrowserManager:
         self._thread: Optional[threading.Thread] = None
         self._playwright = None
         self._context = None  # persistent browser context
-        self._pages: Dict[str, Any] = {}  # session_id -> Page
+        self._pages: "OrderedDict[str, Any]" = OrderedDict()  # session_id -> Page (LRU order)
         self._started = False
 
     @classmethod
@@ -119,6 +122,26 @@ class BrowserManager:
             downloads_path=str(download_dir),
         )
         self._context.set_default_navigation_timeout(settings.BROWSER_NAV_TIMEOUT_MS)
+
+        # Enforce the domain/SSRF guard at the network layer so it covers
+        # clicks, redirects, form submits and sub-resources — not just open().
+        async def _route_guard(route):
+            try:
+                url = route.request.url
+                err = self._check_url(url)
+                if err:
+                    logger.warning(f"blocked navigation to {url}: {err}")
+                    await route.abort()
+                else:
+                    await route.continue_()
+            except Exception:
+                # Never let the guard crash a request pipeline; fail closed.
+                try:
+                    await route.abort()
+                except Exception:
+                    pass
+
+        await self._context.route("**/*", _route_guard)
         logger.info(
             f"BrowserManager launched (headless={settings.BROWSER_HEADLESS}, "
             f"profile={profile_dir})"
@@ -137,9 +160,65 @@ class BrowserManager:
         if page is None or page.is_closed():
             page = await self._context.new_page()
             self._pages[session_id] = page
+        # Mark most-recently-used for LRU eviction.
+        self._pages.move_to_end(session_id)
+        # Evict least-recently-used tabs beyond the cap.
+        while len(self._pages) > settings.BROWSER_MAX_TABS:
+            old_sid, old_page = next(iter(self._pages.items()))
+            if old_sid == session_id:
+                break
+            self._pages.pop(old_sid, None)
+            try:
+                if old_page and not old_page.is_closed():
+                    await old_page.close()
+            except Exception as e:
+                logger.warning(f"failed to evict tab {old_sid}: {e}")
         return page
 
-    # --- domain / scheme guard -------------------------------------------------------
+    # --- domain / scheme / SSRF guard ------------------------------------------------
+
+    def _browser_settings(self) -> Dict[str, Any]:
+        """Read effective browser settings (runtime overrides + static fallback)."""
+        try:
+            from .settings_manager import SettingsManager
+            return SettingsManager.get_instance().get_browser_settings()
+        except Exception:
+            return {
+                "domain_allowlist": settings.BROWSER_DOMAIN_ALLOWLIST,
+                "domain_blocklist": settings.BROWSER_DOMAIN_BLOCKLIST,
+                "block_private_ips": settings.BROWSER_BLOCK_PRIVATE_IPS,
+            }
+
+    @staticmethod
+    def _is_blocked_ip(host: str) -> bool:
+        """True if host is (or resolves to) a private/loopback/link-local/reserved IP.
+
+        Defends against SSRF to localhost, cloud metadata (169.254.169.254),
+        and internal networks — including DNS names that resolve to those ranges.
+        """
+        candidates = set()
+        # Literal IP host
+        try:
+            candidates.add(ipaddress.ip_address(host))
+        except ValueError:
+            # Hostname — resolve to all addresses
+            try:
+                for res in socket.getaddrinfo(host, None):
+                    ip_str = res[4][0]
+                    try:
+                        candidates.add(ipaddress.ip_address(ip_str))
+                    except ValueError:
+                        continue
+            except (socket.gaierror, UnicodeError):
+                # Unresolvable — treat as blocked (fail closed)
+                return True
+        if not candidates:
+            return True
+        for ip in candidates:
+            if (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_unspecified):
+                return True
+        return False
 
     def _check_url(self, url: str) -> Optional[str]:
         """Return an error string if the URL is not allowed, else None."""
@@ -152,10 +231,15 @@ class BrowserManager:
         host = (parsed.hostname or "").lower()
         if not host:
             return "URL has no host"
-        block = [d.strip().lower() for d in (settings.BROWSER_DOMAIN_BLOCKLIST or "").split(",") if d.strip()]
+
+        cfg = self._browser_settings()
+        if cfg.get("block_private_ips", True) and self._is_blocked_ip(host):
+            return f"Host '{host}' resolves to a private/loopback/link-local address (SSRF blocked)"
+
+        block = [d.strip().lower() for d in (cfg.get("domain_blocklist") or "").split(",") if d.strip()]
         if any(host == d or host.endswith("." + d) for d in block):
             return f"Domain '{host}' is on the blocklist"
-        allow = [d.strip().lower() for d in (settings.BROWSER_DOMAIN_ALLOWLIST or "").split(",") if d.strip()]
+        allow = [d.strip().lower() for d in (cfg.get("domain_allowlist") or "").split(",") if d.strip()]
         if allow and not any(host == d or host.endswith("." + d) for d in allow):
             return f"Domain '{host}' is not on the allowlist"
         return None
@@ -174,7 +258,7 @@ class BrowserManager:
         text = (await page.inner_text("body"))[:max_chars]
         forms = await page.eval_on_selector_all(
             "form",
-            "els => els.map(f => ({action: f.action, method: f.method, "
+            "els => els.slice(0, 30).map(f => ({action: f.action, method: f.method, "
             "fields: Array.from(f.elements).map(e => e.name).filter(Boolean)}))",
         )
         links = await page.eval_on_selector_all(
@@ -211,29 +295,58 @@ class BrowserManager:
     async def _a_click(self, session_id: str, target: str):
         page = await self._get_page(session_id)
         url_before, title_before = page.url, await page.title()
-        # Prefer accessible text; fall back to CSS selector.
         try:
-            await page.get_by_text(target, exact=False).first.click(timeout=8000)
+            dom_before = await page.evaluate("document.body.innerHTML.length")
+        except Exception:
+            dom_before = None
+        # Prefer exact accessible text, then substring, then CSS selector.
+        matched_count = None
+        try:
+            loc = page.get_by_text(target, exact=True)
+            matched_count = await loc.count()
+            if matched_count == 0:
+                loc = page.get_by_text(target, exact=False)
+                matched_count = await loc.count()
+            await loc.first.click(timeout=8000)
         except Exception:
             await page.click(target, timeout=8000)
         await page.wait_for_load_state("domcontentloaded")
         url_after, title_after = page.url, await page.title()
-        changed = (url_after != url_before) or (title_after != title_before)
-        # Post-action verifier (REQUIREMENTS 11.7): confirm the page reacted.
+        try:
+            dom_after = await page.evaluate("document.body.innerHTML.length")
+        except Exception:
+            dom_after = None
+
+        # Defense in depth: if a JS-driven navigation landed on a blocked host.
+        nav_block = self._check_url(url_after) if url_after != url_before else None
+
+        url_changed = url_after != url_before
+        title_changed = title_after != title_before
+        dom_changed = (dom_before is not None and dom_after is not None
+                       and dom_before != dom_after)
+        observable = url_changed or title_changed or dom_changed
+        # Post-action verifier (REQUIREMENTS 11.7). A click with no observable
+        # change may still have succeeded (e.g. idempotent action), so report
+        # None rather than False in that case to avoid misleading the agent.
         verification = {
-            "expected": "page URL or title changes after click",
-            "observed": {"url_changed": url_after != url_before,
-                         "title_changed": title_after != title_before},
-            "verified": changed,
+            "expected": "page URL, title, or DOM changes after click",
+            "observed": {"url_changed": url_changed, "title_changed": title_changed,
+                         "dom_changed": dom_changed},
+            "verified": True if observable else None,
         }
-        return {
+        result = {
             "status": "success",
             "target": target,
+            "matched_count": matched_count,
             "url_after": url_after,
             "title_after": title_after,
-            "changed": changed,
+            "changed": observable,
             "verification": verification,
         }
+        if nav_block:
+            result["blocked"] = True
+            result["block_reason"] = nav_block
+        return result
 
     async def _a_type(self, session_id: str, target: str, value: str, submit: bool):
         page = await self._get_page(session_id)
@@ -263,8 +376,14 @@ class BrowserManager:
                 "verified": filled_len == len(value) if filled_len is not None else False,
             }
         # Never echo the typed value back.
-        return {"status": "success", "target": target, "submitted": submit,
-                "url": url_after, "verification": verification}
+        result = {"status": "success", "target": target, "submitted": submit,
+                  "url": url_after, "verification": verification}
+        if submit and url_after != url_before:
+            nav_block = self._check_url(url_after)
+            if nav_block:
+                result["blocked"] = True
+                result["block_reason"] = nav_block
+        return result
 
     async def _a_download(self, session_id: str, target: str, timeout_ms: int):
         page = await self._get_page(session_id)
@@ -284,9 +403,26 @@ class BrowserManager:
         # Keep only the basename to avoid path traversal from a hostile page.
         safe_name = Path(suggested).name
         dest = download_dir / safe_name
+        # Avoid clobbering an existing download: append (1), (2)…
+        if dest.exists():
+            stem, suffix = dest.stem, dest.suffix
+            i = 1
+            while dest.exists():
+                dest = download_dir / f"{stem}({i}){suffix}"
+                i += 1
+            safe_name = dest.name
         await download.save_as(str(dest))
         exists = dest.exists()
         size = dest.stat().st_size if exists else 0
+        # Enforce max download size — delete oversized files.
+        max_bytes = settings.BROWSER_MAX_DOWNLOAD_MB * 1024 * 1024
+        if exists and size > max_bytes:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+            return {"error": f"Download exceeds {settings.BROWSER_MAX_DOWNLOAD_MB}MB limit "
+                             f"({size} bytes) — discarded", "filename": safe_name}
         # Post-action verifier (REQUIREMENTS 11.7): file exists in download folder.
         return {
             "status": "success" if exists else "error",
@@ -396,3 +532,38 @@ class BrowserManager:
         if not self._started:
             return {"current_url": None, "title": None, "is_active": False}
         return self._run(self._a_state(session_id))
+
+    def shutdown(self):
+        """Close all pages, the context, Playwright, and stop the background loop.
+
+        Called on app shutdown so Chromium exits and the profile lock is released
+        (otherwise a headed browser can linger and block the next launch).
+        """
+        if not self._started:
+            return
+
+        async def _close():
+            for p in list(self._pages.values()):
+                try:
+                    if not p.is_closed():
+                        await p.close()
+                except Exception:
+                    pass
+            if self._context:
+                await self._context.close()
+            if self._playwright:
+                await self._playwright.stop()
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(_close(), self._loop)
+            fut.result(timeout=15)
+        except Exception as e:
+            logger.warning(f"browser shutdown error: {e}")
+        finally:
+            self._pages.clear()
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except Exception:
+                pass
+            self._started = False
+            logger.info("BrowserManager shut down")

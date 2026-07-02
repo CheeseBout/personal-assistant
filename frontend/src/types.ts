@@ -295,6 +295,13 @@ export interface RagSettings {
   reranker_available?: boolean
 }
 
+// Browser settings editable from the Settings panel
+export interface BrowserSettings {
+  domain_allowlist: string
+  domain_blocklist: string
+  block_private_ips: boolean
+}
+
 // SSE events from POST /api/chat/stream
 export type ChatStreamEvent =
   | { type: 'retrieval'; sources: Citation[] }

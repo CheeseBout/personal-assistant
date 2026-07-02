@@ -144,6 +144,9 @@ def run_migration():
 
     conn = sqlite3.connect(str(DB_PATH))
     try:
+        # DEPRECATED: browser_sessions is no longer written to (live state comes
+        # from the in-memory BrowserManager; history from browser_actions). Kept
+        # as IF NOT EXISTS to avoid migration churn on existing DBs.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS browser_sessions (
                 id VARCHAR PRIMARY KEY,

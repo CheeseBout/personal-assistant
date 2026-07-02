@@ -121,8 +121,14 @@ class Settings(BaseSettings):
     BROWSER_PROFILE_DIR: str = "../data/browser/profile"
     BROWSER_DOWNLOAD_DIR: str = "../data/browser/downloads"
     BROWSER_SCREENSHOT_DIR: str = "../data/browser/screenshots"
-    BROWSER_DOMAIN_ALLOWLIST: str = ""          # comma-separated; "" = allow all
+    BROWSER_DOMAIN_ALLOWLIST: str = ""          # comma-separated; "" = allow all public web
     BROWSER_DOMAIN_BLOCKLIST: str = ""          # comma-separated
+    # Private/loopback/link-local IPs are ALWAYS blocked when this is True,
+    # regardless of the allowlist (SSRF guard). Applies to browser.open and to
+    # every navigation/sub-resource via the context route interceptor.
+    BROWSER_BLOCK_PRIVATE_IPS: bool = True
+    BROWSER_MAX_DOWNLOAD_MB: int = 100
+    BROWSER_MAX_TABS: int = 5
     BROWSER_NAV_TIMEOUT_MS: int = 30000
     BROWSER_OP_TIMEOUT_S: int = 45               # sync-bridge wait ceiling per browser op
     BROWSER_DOWNLOAD_TIMEOUT_MS: int = 60000     # how long to wait for a download to start/finish

@@ -9,7 +9,7 @@ from .api.chat import router as chat_router
 from .api.debug import router as debug_router
 from .api.agent import router as agent_router
 from .api.google import router as google_router
-from .api.settings import router as settings_router
+from .api.settings import router as settings_router, browser_router
 from .core.config import settings
 
 app = FastAPI(title="Local RAG Agent", version="0.1.0")
@@ -68,6 +68,8 @@ async def startup_event():
 async def shutdown_event():
     from .services.scheduler import SchedulerManager
     SchedulerManager.get_instance().shutdown()
+    from .services.browser_manager import BrowserManager
+    BrowserManager.get_instance().shutdown()
 
 
 @app.get("/")
@@ -81,6 +83,7 @@ app.include_router(debug_router)
 app.include_router(agent_router)
 app.include_router(google_router)
 app.include_router(settings_router)
+app.include_router(browser_router)
 
 
 @app.get("/api/health")

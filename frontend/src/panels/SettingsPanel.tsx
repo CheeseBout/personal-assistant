@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import type { AgentSettings, RagSettings } from '../types'
+import type { AgentSettings, BrowserSettings, RagSettings } from '../types'
 
 interface Props {
   sessionId: string
@@ -13,6 +13,10 @@ export function SettingsPanel({ sessionId }: Props) {
   const [draft, setDraft] = useState<RagSettings | null>(null)
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState<string | null>(null)
+  const [browser, setBrowser] = useState<BrowserSettings | null>(null)
+  const [browserDraft, setBrowserDraft] = useState<BrowserSettings | null>(null)
+  const [browserSaving, setBrowserSaving] = useState(false)
+  const [browserSavedAt, setBrowserSavedAt] = useState<string | null>(null)
 
   useEffect(() => {
     api
@@ -24,6 +28,15 @@ export function SettingsPanel({ sessionId }: Props) {
       .then((r) => {
         setRag(r)
         setDraft(r)
+      })
+      .catch(() => {
+        // ignore — panel still works without editable settings
+      })
+    api
+      .browserSettings()
+      .then((b) => {
+        setBrowser(b)
+        setBrowserDraft(b)
       })
       .catch(() => {
         // ignore — panel still works without editable settings
@@ -58,6 +71,31 @@ export function SettingsPanel({ sessionId }: Props) {
 
   const resetDraft = () => {
     if (rag) setDraft(rag)
+  }
+
+  const browserDirty = browser && browserDraft && (
+    browser.domain_allowlist !== browserDraft.domain_allowlist ||
+    browser.domain_blocklist !== browserDraft.domain_blocklist ||
+    browser.block_private_ips !== browserDraft.block_private_ips
+  )
+
+  const saveBrowser = async () => {
+    if (!browserDraft) return
+    setBrowserSaving(true)
+    try {
+      const updated = await api.updateBrowserSettings(browserDraft)
+      setBrowser(updated)
+      setBrowserDraft(updated)
+      setBrowserSavedAt(new Date().toLocaleTimeString())
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBrowserSaving(false)
+    }
+  }
+
+  const resetBrowserDraft = () => {
+    if (browser) setBrowserDraft(browser)
   }
 
   return (
@@ -190,6 +228,60 @@ export function SettingsPanel({ sessionId }: Props) {
               Hoàn tác
             </button>
             {savedAt && !dirty && <span className="muted">Đã lưu lúc {savedAt}</span>}
+          </div>
+        </div>
+      )}
+
+      <div className="section-title">Browser / Duyệt web</div>
+      {!browserDraft ? (
+        <div className="empty">Đang tải cài đặt duyệt web…</div>
+      ) : (
+        <div className="card">
+          <div className="settings-grid">
+            <span className="k">Domain allowlist (phân tách bằng dấu phẩy)</span>
+            <span className="v">
+              <textarea
+                rows={2}
+                placeholder="example.com,github.com"
+                value={browserDraft.domain_allowlist}
+                onChange={(e) => setBrowserDraft({ ...browserDraft, domain_allowlist: e.target.value })}
+              />
+            </span>
+
+            <span className="k">Domain blocklist (phân tách bằng dấu phẩy)</span>
+            <span className="v">
+              <textarea
+                rows={2}
+                placeholder="tracker.com,ads.example.com"
+                value={browserDraft.domain_blocklist}
+                onChange={(e) => setBrowserDraft({ ...browserDraft, domain_blocklist: e.target.value })}
+              />
+            </span>
+
+            <span className="k">Chống SSRF</span>
+            <span className="v">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={browserDraft.block_private_ips}
+                  onChange={(e) => setBrowserDraft({ ...browserDraft, block_private_ips: e.target.checked })}
+                />{' '}
+                Chặn IP nội bộ / localhost (chống SSRF)
+              </label>
+            </span>
+          </div>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={!browserDirty || browserSaving}
+              onClick={saveBrowser}
+            >
+              {browserSaving ? 'Đang lưu…' : 'Lưu'}
+            </button>
+            <button className="btn btn-sm" disabled={!browserDirty || browserSaving} onClick={resetBrowserDraft}>
+              Hoàn tác
+            </button>
+            {browserSavedAt && !browserDirty && <span className="muted">Đã lưu lúc {browserSavedAt}</span>}
           </div>
         </div>
       )}
