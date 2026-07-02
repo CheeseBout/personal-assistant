@@ -36,6 +36,7 @@ class GoogleAuth:
 
     def __init__(self):
         self._creds = None  # google.oauth2.credentials.Credentials
+        self._service_cache = {}  # (api_name, version) -> service client
 
     @classmethod
     def get_instance(cls) -> "GoogleAuth":
@@ -83,6 +84,7 @@ class GoogleAuth:
         if creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
+                self._service_cache.clear()  # rebuild clients with refreshed creds
                 self._save(creds)
                 return creds
             except Exception as e:
@@ -92,7 +94,14 @@ class GoogleAuth:
 
     def _save(self, creds):
         try:
-            _token_path().write_text(creds.to_json(), encoding="utf-8")
+            path = _token_path()
+            path.write_text(creds.to_json(), encoding="utf-8")
+            # Harden permissions: the token grants full Gmail/Drive access.
+            # No-op on Windows; enforces owner-only read/write on POSIX.
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
         except Exception as e:
             logger.error(f"Failed to persist Google token: {e}")
 
@@ -111,6 +120,7 @@ class GoogleAuth:
             )
             creds = flow.run_local_server(port=0, prompt="consent")
             self._creds = creds
+            self._service_cache.clear()
             self._save(creds)
             return {"connected": True, "email": self._email(creds)}
         except Exception as e:
@@ -118,8 +128,29 @@ class GoogleAuth:
             return {"error": f"Đăng nhập Google thất bại: {e}"}
 
     def revoke(self) -> dict:
-        """Forget the cached token (local disconnect)."""
+        """Disconnect: revoke the token at Google, then forget the local cache.
+
+        Revoking at Google's endpoint invalidates the refresh token server-side,
+        so a leaked token.json copy can no longer be refreshed. If the network
+        call fails we still clear local state (best effort).
+        """
+        creds = self._creds
+        token_to_revoke = None
+        if creds is not None:
+            token_to_revoke = getattr(creds, "refresh_token", None) or getattr(creds, "token", None)
+        if token_to_revoke:
+            try:
+                import requests
+                requests.post(
+                    "https://oauth2.googleapis.com/revoke",
+                    params={"token": token_to_revoke},
+                    headers={"content-type": "application/x-www-form-urlencoded"},
+                    timeout=10,
+                )
+            except Exception as e:
+                logger.warning(f"Google token revoke call failed (clearing locally anyway): {e}")
         self._creds = None
+        self._service_cache.clear()
         try:
             path = _token_path()
             if path.exists():
@@ -146,9 +177,19 @@ class GoogleAuth:
             return None
 
     def build_service(self, api_name: str, version: str):
-        """Return a Google API service client, or raise RuntimeError if not connected."""
+        """Return a Google API service client, or raise RuntimeError if not connected.
+
+        Clients are cached per (api_name, version); the cache is cleared on
+        refresh/connect/revoke so a stale client never outlives its credentials.
+        """
         creds = self.get_credentials()
         if creds is None:
             raise RuntimeError("not_connected")
+        key = (api_name, version)
+        cached = self._service_cache.get(key)
+        if cached is not None:
+            return cached
         from googleapiclient.discovery import build
-        return build(api_name, version, credentials=creds, cache_discovery=False)
+        svc = build(api_name, version, credentials=creds, cache_discovery=False)
+        self._service_cache[key] = svc
+        return svc

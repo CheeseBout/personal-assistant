@@ -12,11 +12,23 @@ Security:
 
 from typing import Dict, Any, List
 
-from .google_workspace_common import service_or_none, record_action, NOT_CONNECTED
+from .google_workspace_common import (
+    service_or_none, record_action, execute_with_retry, safe_error, NOT_CONNECTED,
+)
 
 
 def _sheets():
     return service_or_none("sheets", "v4")
+
+
+def _value_input_option(arguments: Dict[str, Any]) -> str:
+    """RAW by default so untrusted cell content is written literally.
+
+    Only interpret input as formulas (USER_ENTERED) when the caller explicitly
+    opts in with as_formula=true. This blocks formula/CSV injection where an
+    untrusted value like =IMPORTXML(...) would exfiltrate data on write.
+    """
+    return "USER_ENTERED" if arguments.get("as_formula") else "RAW"
 
 
 def _coerce_values(values: Any) -> List[List[Any]]:
@@ -39,14 +51,14 @@ def sheets_read(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     if not rng or not isinstance(rng, str):
         return {"error": "Missing or invalid 'range' (vd 'Sheet1!A1:D20')"}
     try:
-        resp = svc.spreadsheets().values().get(
+        resp = execute_with_retry(svc.spreadsheets().values().get(
             spreadsheetId=sheet_id, range=rng
-        ).execute()
+        ))
         rows = resp.get("values", [])
         result = {"spreadsheet_id": sheet_id, "range": resp.get("range", rng),
                   "row_count": len(rows), "values": rows}
     except Exception as e:
-        result = {"error": f"Sheets read lỗi: {e}"}
+        result = safe_error("Sheets read lỗi", e)
     record_action(session_id, "sheets", "read", f"{sheet_id}!{rng}", result)
     return result
 
@@ -64,15 +76,15 @@ def sheets_update(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         return {"error": "Missing 'values'"}
     try:
         body = {"values": _coerce_values(values)}
-        resp = svc.spreadsheets().values().update(
+        resp = execute_with_retry(svc.spreadsheets().values().update(
             spreadsheetId=sheet_id, range=rng,
-            valueInputOption="USER_ENTERED", body=body,
-        ).execute()
+            valueInputOption=_value_input_option(arguments), body=body,
+        ))
         result = {"status": "success", "spreadsheet_id": sheet_id,
                   "updated_cells": resp.get("updatedCells", 0),
                   "updated_range": resp.get("updatedRange", rng)}
     except Exception as e:
-        result = {"error": f"Sheets update lỗi: {e}"}
+        result = safe_error("Sheets update lỗi", e)
     record_action(session_id, "sheets", "update", f"{sheet_id}!{rng}", result)
     return result
 
@@ -90,16 +102,17 @@ def sheets_append(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         return {"error": "Missing 'values'"}
     try:
         body = {"values": _coerce_values(values)}
-        resp = svc.spreadsheets().values().append(
+        resp = execute_with_retry(svc.spreadsheets().values().append(
             spreadsheetId=sheet_id, range=rng,
-            valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS", body=body,
-        ).execute()
+            valueInputOption=_value_input_option(arguments),
+            insertDataOption="INSERT_ROWS", body=body,
+        ))
         updates = resp.get("updates", {})
         result = {"status": "success", "spreadsheet_id": sheet_id,
                   "updated_cells": updates.get("updatedCells", 0),
                   "updated_range": updates.get("updatedRange", rng)}
     except Exception as e:
-        result = {"error": f"Sheets append lỗi: {e}"}
+        result = safe_error("Sheets append lỗi", e)
     record_action(session_id, "sheets", "append", f"{sheet_id}!{rng}", result)
     return result
 
@@ -112,14 +125,14 @@ def sheets_create(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     if not title or not isinstance(title, str):
         return {"error": "Missing or invalid 'title'"}
     try:
-        created = svc.spreadsheets().create(
+        created = execute_with_retry(svc.spreadsheets().create(
             body={"properties": {"title": title}},
             fields="spreadsheetId,properties.title",
-        ).execute()
+        ))
         result = {"status": "success",
                   "spreadsheet_id": created.get("spreadsheetId"),
                   "title": created.get("properties", {}).get("title", title)}
     except Exception as e:
-        result = {"error": f"Sheets create lỗi: {e}"}
+        result = safe_error("Sheets create lỗi", e)
     record_action(session_id, "sheets", "create", title, result)
     return result

@@ -15,7 +15,10 @@ Security:
 import io
 from typing import Dict, Any
 
-from .google_workspace_common import service_or_none, record_action, NOT_CONNECTED
+from .google_workspace_common import (
+    service_or_none, record_action, execute_with_retry, safe_error,
+    max_download_bytes, NOT_CONNECTED,
+)
 from .file_tools import _resolve_path
 from ..core.logging_config import logger
 
@@ -43,13 +46,15 @@ def drive_search(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         max_results = max(1, min(int(max_results), 100))
     except (ValueError, TypeError):
         max_results = 20
+    page_token = arguments.get("page_token") or None
     try:
-        resp = svc.files().list(
+        resp = execute_with_retry(svc.files().list(
             q=query or None,
             pageSize=max_results,
-            fields="files(id,name,mimeType,modifiedTime,size,owners(emailAddress))",
+            pageToken=page_token,
+            fields="nextPageToken,files(id,name,mimeType,modifiedTime,size,owners(emailAddress))",
             orderBy="modifiedTime desc",
-        ).execute()
+        ))
         files = [
             {
                 "id": f.get("id"),
@@ -60,9 +65,10 @@ def drive_search(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
             }
             for f in (resp.get("files") or [])
         ]
-        result = {"query": query, "count": len(files), "files": files}
+        result = {"query": query, "count": len(files), "files": files,
+                  "next_page_token": resp.get("nextPageToken")}
     except Exception as e:
-        result = {"error": f"Drive search lỗi: {e}"}
+        result = safe_error("Drive search lỗi", e)
     record_action(session_id, "drive", "search", query, result)
     return result
 
@@ -80,14 +86,14 @@ def drive_read(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     except (ValueError, TypeError):
         max_chars = 10000
     try:
-        meta = svc.files().get(fileId=file_id, fields="id,name,mimeType,size").execute()
+        meta = execute_with_retry(svc.files().get(fileId=file_id, fields="id,name,mimeType,size"))
         mime = meta.get("mimeType", "")
         text = ""
         if mime in _EXPORT_TEXT:
-            data = svc.files().export(fileId=file_id, mimeType=_EXPORT_TEXT[mime]).execute()
+            data = execute_with_retry(svc.files().export(fileId=file_id, mimeType=_EXPORT_TEXT[mime]))
             text = data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)
         elif mime.startswith("text/"):
-            data = svc.files().get_media(fileId=file_id).execute()
+            data = execute_with_retry(svc.files().get_media(fileId=file_id))
             text = data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)
         else:
             text = "(Không phải file text; dùng drive.download để tải về.)"
@@ -96,7 +102,7 @@ def drive_read(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
             "content": text[:max_chars],
         }
     except Exception as e:
-        result = {"error": f"Drive read lỗi: {e}"}
+        result = safe_error("Drive read lỗi", e)
     record_action(session_id, "drive", "read", file_id, result)
     return result
 
@@ -118,8 +124,20 @@ def drive_download(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]
     try:
         from googleapiclient.http import MediaIoBaseDownload
 
-        meta = svc.files().get(fileId=file_id, fields="name,mimeType").execute()
+        meta = execute_with_retry(svc.files().get(fileId=file_id, fields="name,mimeType,size"))
         mime = meta.get("mimeType", "")
+        cap = max_download_bytes()
+        # Pre-check declared size (binary files report size; Google-native don't).
+        declared = meta.get("size")
+        if declared is not None:
+            try:
+                if int(declared) > cap:
+                    result = {"error": f"File vượt giới hạn tải xuống "
+                                       f"({int(declared)} bytes > {cap})"}
+                    record_action(session_id, "drive", "download", dest_rel, result)
+                    return result
+            except (ValueError, TypeError):
+                pass
         buf = io.BytesIO()
         if mime in _EXPORT_TEXT:
             request = svc.files().export_media(fileId=file_id, mimeType=_EXPORT_TEXT[mime])
@@ -129,12 +147,17 @@ def drive_download(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]
         done = False
         while not done:
             _, done = downloader.next_chunk()
+            # Guard exports (no declared size) and lying metadata mid-stream.
+            if buf.tell() > cap:
+                result = {"error": f"File vượt giới hạn tải xuống ({cap} bytes) — đã hủy"}
+                record_action(session_id, "drive", "download", dest_rel, result)
+                return result
         abs_path.parent.mkdir(parents=True, exist_ok=True)
         abs_path.write_bytes(buf.getvalue())
         result = {"status": "success", "file_id": file_id, "saved_path": dest_rel,
                   "size_bytes": abs_path.stat().st_size}
     except Exception as e:
-        result = {"error": f"Drive download lỗi: {e}"}
+        result = safe_error("Drive download lỗi", e)
     record_action(session_id, "drive", "download", dest_rel, result)
     return result
 
@@ -161,10 +184,10 @@ def drive_upload(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         if folder_id:
             body["parents"] = [folder_id]
         media = MediaFileUpload(str(abs_path), resumable=False)
-        created = svc.files().create(body=body, media_body=media, fields="id,name").execute()
+        created = execute_with_retry(svc.files().create(body=body, media_body=media, fields="id,name"))
         result = {"status": "success", "file_id": created.get("id"), "name": created.get("name")}
     except Exception as e:
-        result = {"error": f"Drive upload lỗi: {e}"}
+        result = safe_error("Drive upload lỗi", e)
     record_action(session_id, "drive", "upload", f"{src_rel} -> {name}", result)
     return result
 
@@ -178,15 +201,15 @@ def drive_move(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     if not file_id or not new_parent:
         return {"error": "Missing 'file_id' or 'folder_id'"}
     try:
-        meta = svc.files().get(fileId=file_id, fields="parents").execute()
+        meta = execute_with_retry(svc.files().get(fileId=file_id, fields="parents"))
         prev_parents = ",".join(meta.get("parents", []))
-        svc.files().update(
+        execute_with_retry(svc.files().update(
             fileId=file_id, addParents=new_parent,
             removeParents=prev_parents, fields="id,parents",
-        ).execute()
+        ))
         result = {"status": "success", "file_id": file_id, "folder_id": new_parent}
     except Exception as e:
-        result = {"error": f"Drive move lỗi: {e}"}
+        result = safe_error("Drive move lỗi", e)
     record_action(session_id, "drive", "move", file_id, result)
     return result
 
@@ -200,10 +223,10 @@ def drive_rename(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     if not file_id or not new_name:
         return {"error": "Missing 'file_id' or 'name'"}
     try:
-        updated = svc.files().update(fileId=file_id, body={"name": new_name}, fields="id,name").execute()
+        updated = execute_with_retry(svc.files().update(fileId=file_id, body={"name": new_name}, fields="id,name"))
         result = {"status": "success", "file_id": file_id, "name": updated.get("name")}
     except Exception as e:
-        result = {"error": f"Drive rename lỗi: {e}"}
+        result = safe_error("Drive rename lỗi", e)
     record_action(session_id, "drive", "rename", file_id, result)
     return result
 
@@ -217,9 +240,9 @@ def drive_trash(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         return {"error": "Missing or invalid 'file_id'"}
     try:
         # trash (recoverable) — never permanent delete in this phase.
-        svc.files().update(fileId=file_id, body={"trashed": True}, fields="id").execute()
+        execute_with_retry(svc.files().update(fileId=file_id, body={"trashed": True}, fields="id"))
         result = {"status": "success", "file_id": file_id, "trashed": True}
     except Exception as e:
-        result = {"error": f"Drive trash lỗi: {e}"}
+        result = safe_error("Drive trash lỗi", e)
     record_action(session_id, "drive", "trash", file_id, result)
     return result

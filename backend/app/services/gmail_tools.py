@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from .google_auth import GoogleAuth
+from .google_workspace_common import execute_with_retry, safe_error, max_download_bytes
 from ..core.config import settings
 from ..core.logging_config import logger
 from ..core.redaction import redact_value
@@ -108,16 +109,19 @@ def gmail_search(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         max_results = max(1, min(int(max_results), 50))
     except (ValueError, TypeError):
         max_results = 10
+    page_token = arguments.get("page_token")
+    if page_token is not None and not isinstance(page_token, str):
+        page_token = None
     try:
-        resp = svc.users().messages().list(
-            userId="me", q=query, maxResults=max_results
-        ).execute()
+        resp = execute_with_retry(svc.users().messages().list(
+            userId="me", q=query, maxResults=max_results, pageToken=page_token
+        ))
         out = []
         for m in (resp.get("messages") or []):
-            full = svc.users().messages().get(
+            full = execute_with_retry(svc.users().messages().get(
                 userId="me", id=m["id"], format="metadata",
                 metadataHeaders=["From", "Subject", "Date"],
-            ).execute()
+            ))
             p = full.get("payload", {})
             out.append({
                 "id": m["id"],
@@ -127,9 +131,10 @@ def gmail_search(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
                 "date": _header(p, "Date"),
                 "snippet": full.get("snippet", ""),
             })
-        result = {"query": query, "count": len(out), "messages": out}
+        result = {"query": query, "count": len(out), "messages": out,
+                  "next_page_token": resp.get("nextPageToken")}
     except Exception as e:
-        result = {"error": f"Gmail search lỗi: {e}"}
+        result = safe_error("Gmail search lỗi", e)
     _record(session_id, "search", query, result)
     return result
 
@@ -147,7 +152,7 @@ def gmail_read(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     except (ValueError, TypeError):
         max_chars = 8000
     try:
-        full = svc.users().messages().get(userId="me", id=msg_id, format="full").execute()
+        full = execute_with_retry(svc.users().messages().get(userId="me", id=msg_id, format="full"))
         p = full.get("payload", {})
         result = {
             "id": msg_id,
@@ -159,7 +164,7 @@ def gmail_read(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
             "body": _extract_text(p)[:max_chars],
         }
     except Exception as e:
-        result = {"error": f"Gmail read lỗi: {e}"}
+        result = safe_error("Gmail read lỗi", e)
     _record(session_id, "read", msg_id, result)
     return result
 
@@ -177,7 +182,7 @@ def gmail_thread_summary(arguments: Dict[str, Any], session_id: str) -> Dict[str
     except (ValueError, TypeError):
         max_chars = 12000
     try:
-        thread = svc.users().threads().get(userId="me", id=thread_id, format="full").execute()
+        thread = execute_with_retry(svc.users().threads().get(userId="me", id=thread_id, format="full"))
         msgs = []
         for m in (thread.get("messages") or []):
             p = m.get("payload", {})
@@ -193,7 +198,7 @@ def gmail_thread_summary(arguments: Dict[str, Any], session_id: str) -> Dict[str
         )[:max_chars]
         result = {"thread_id": thread_id, "message_count": len(msgs), "combined_text": combined}
     except Exception as e:
-        result = {"error": f"Gmail thread lỗi: {e}"}
+        result = safe_error("Gmail thread lỗi", e)
     _record(session_id, "thread_summary", thread_id, result)
     return result
 
@@ -206,7 +211,7 @@ def gmail_list_attachments(arguments: Dict[str, Any], session_id: str) -> Dict[s
     if not msg_id or not isinstance(msg_id, str):
         return {"error": "Missing or invalid 'message_id'"}
     try:
-        full = svc.users().messages().get(userId="me", id=msg_id, format="full").execute()
+        full = execute_with_retry(svc.users().messages().get(userId="me", id=msg_id, format="full"))
         atts = []
 
         def walk(part):
@@ -225,7 +230,7 @@ def gmail_list_attachments(arguments: Dict[str, Any], session_id: str) -> Dict[s
         walk(full.get("payload", {}))
         result = {"message_id": msg_id, "count": len(atts), "attachments": atts}
     except Exception as e:
-        result = {"error": f"Gmail list attachments lỗi: {e}"}
+        result = safe_error("Gmail list attachments lỗi", e)
     _record(session_id, "list_attachments", msg_id, result)
     return result
 
@@ -240,10 +245,15 @@ def gmail_get_attachment(arguments: Dict[str, Any], session_id: str) -> Dict[str
     if not msg_id or not att_id:
         return {"error": "Missing 'message_id' or 'attachment_id'"}
     try:
-        att = svc.users().messages().attachments().get(
+        att = execute_with_retry(svc.users().messages().attachments().get(
             userId="me", messageId=msg_id, id=att_id
-        ).execute()
+        ))
         data = base64.urlsafe_b64decode(att.get("data", "").encode("ascii"))
+        cap = max_download_bytes()
+        if len(data) > cap:
+            result = {"error": f"Attachment vượt giới hạn tải xuống ({len(data)} bytes > {cap})"}
+            _record(session_id, "get_attachment", filename, result)
+            return result
         out_dir = Path(settings.GOOGLE_ATTACHMENT_DIR)
         if not out_dir.is_absolute():
             out_dir = (Path(__file__).parent.parent.parent / settings.GOOGLE_ATTACHMENT_DIR).resolve()
@@ -254,7 +264,7 @@ def gmail_get_attachment(arguments: Dict[str, Any], session_id: str) -> Dict[str
         result = {"status": "success", "filename": safe_name,
                   "saved_path": str(dest), "size_bytes": len(data)}
     except Exception as e:
-        result = {"error": f"Gmail get attachment lỗi: {e}"}
+        result = safe_error("Gmail get attachment lỗi", e)
     _record(session_id, "get_attachment", filename, result)
     return result
 
@@ -281,13 +291,13 @@ def gmail_draft(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         return {"error": "Invalid 'subject' or 'body'"}
     try:
         raw = _build_raw(to, subject, body)
-        draft = svc.users().drafts().create(
+        draft = execute_with_retry(svc.users().drafts().create(
             userId="me", body={"message": {"raw": raw}}
-        ).execute()
+        ))
         # Do NOT echo recipient/body back beyond what is needed.
         result = {"status": "success", "draft_id": draft.get("id"), "to": to, "subject": subject}
     except Exception as e:
-        result = {"error": f"Gmail draft lỗi: {e}"}
+        result = safe_error("Gmail draft lỗi", e)
     _record(session_id, "draft", to, result)
     return result
 
@@ -305,11 +315,11 @@ def gmail_send(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         return {"error": "Invalid 'subject' or 'body'"}
     try:
         raw = _build_raw(to, subject, body)
-        sent = svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        sent = execute_with_retry(svc.users().messages().send(userId="me", body={"raw": raw}))
         result = {"status": "success", "message_id": sent.get("id"),
                   "thread_id": sent.get("threadId"), "to": to, "subject": subject}
     except Exception as e:
-        result = {"error": f"Gmail send lỗi: {e}"}
+        result = safe_error("Gmail send lỗi", e)
     _record(session_id, "send", to, result)
     return result
 
@@ -328,15 +338,15 @@ def gmail_label(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     if not add and not remove:
         return {"error": "Provide at least one of 'add_labels' / 'remove_labels'"}
     try:
-        updated = svc.users().messages().modify(
+        updated = execute_with_retry(svc.users().messages().modify(
             userId="me", id=msg_id,
             body={"addLabelIds": [str(x) for x in add],
                   "removeLabelIds": [str(x) for x in remove]},
-        ).execute()
+        ))
         result = {"status": "success", "message_id": msg_id,
                   "label_ids": updated.get("labelIds", [])}
     except Exception as e:
-        result = {"error": f"Gmail label lỗi: {e}"}
+        result = safe_error("Gmail label lỗi", e)
     _record(session_id, "label", msg_id, result)
     return result
 
@@ -350,10 +360,10 @@ def gmail_trash(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         return {"error": "Missing or invalid 'message_id'"}
     try:
         # trash (reversible) — never permanent delete in this phase.
-        svc.users().messages().trash(userId="me", id=msg_id).execute()
+        execute_with_retry(svc.users().messages().trash(userId="me", id=msg_id))
         result = {"status": "success", "message_id": msg_id, "trashed": True}
     except Exception as e:
-        result = {"error": f"Gmail trash lỗi: {e}"}
+        result = safe_error("Gmail trash lỗi", e)
     _record(session_id, "trash", msg_id, result)
     return result
 

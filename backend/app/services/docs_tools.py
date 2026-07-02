@@ -12,7 +12,10 @@ Security:
 import io
 from typing import Dict, Any, List
 
-from .google_workspace_common import service_or_none, record_action, NOT_CONNECTED
+from .google_workspace_common import (
+    service_or_none, record_action, execute_with_retry, safe_error,
+    max_download_bytes, NOT_CONNECTED,
+)
 from .file_tools import _resolve_path
 
 
@@ -47,14 +50,14 @@ def docs_read(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     except (ValueError, TypeError):
         max_chars = 12000
     try:
-        doc = svc.documents().get(documentId=doc_id).execute()
+        doc = execute_with_retry(svc.documents().get(documentId=doc_id))
         result = {
             "document_id": doc_id,
             "title": doc.get("title"),
             "content": _extract_doc_text(doc)[:max_chars],
         }
     except Exception as e:
-        result = {"error": f"Docs read lỗi: {e}"}
+        result = safe_error("Docs read lỗi", e)
     record_action(session_id, "docs", "read", doc_id, result)
     return result
 
@@ -70,16 +73,16 @@ def docs_create(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     if not isinstance(body, str):
         return {"error": "Invalid 'body'"}
     try:
-        doc = svc.documents().create(body={"title": title}).execute()
+        doc = execute_with_retry(svc.documents().create(body={"title": title}))
         doc_id = doc.get("documentId")
         if body:
-            svc.documents().batchUpdate(
+            execute_with_retry(svc.documents().batchUpdate(
                 documentId=doc_id,
                 body={"requests": [{"insertText": {"location": {"index": 1}, "text": body}}]},
-            ).execute()
+            ))
         result = {"status": "success", "document_id": doc_id, "title": title}
     except Exception as e:
-        result = {"error": f"Docs create lỗi: {e}"}
+        result = safe_error("Docs create lỗi", e)
     record_action(session_id, "docs", "create", title, result)
     return result
 
@@ -102,18 +105,18 @@ def docs_edit(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         index = 1
     try:
         if mode == "append":
-            doc = svc.documents().get(documentId=doc_id).execute()
+            doc = execute_with_retry(svc.documents().get(documentId=doc_id))
             end = doc.get("body", {}).get("content", [{}])[-1].get("endIndex", 1)
             loc = max(1, end - 1)
         else:
             loc = max(1, index)
-        svc.documents().batchUpdate(
+        execute_with_retry(svc.documents().batchUpdate(
             documentId=doc_id,
             body={"requests": [{"insertText": {"location": {"index": loc}, "text": text}}]},
-        ).execute()
+        ))
         result = {"status": "success", "document_id": doc_id, "mode": mode, "inserted_chars": len(text)}
     except Exception as e:
-        result = {"error": f"Docs edit lỗi: {e}"}
+        result = safe_error("Docs edit lỗi", e)
     record_action(session_id, "docs", "edit", doc_id, result)
     return result
 
@@ -142,15 +145,20 @@ def docs_export(arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         buf = io.BytesIO()
         request = drive.files().export_media(fileId=doc_id, mimeType=mime_map[fmt])
         downloader = MediaIoBaseDownload(buf, request)
+        cap = max_download_bytes()
         done = False
         while not done:
             _, done = downloader.next_chunk()
+            if buf.tell() > cap:
+                result = {"error": f"Export vượt giới hạn ({cap} bytes) — đã hủy"}
+                record_action(session_id, "docs", "export", dest_rel, result)
+                return result
         abs_path.parent.mkdir(parents=True, exist_ok=True)
         abs_path.write_bytes(buf.getvalue())
         result = {"status": "success", "document_id": doc_id,
                   "saved_path": dest_rel, "format": fmt,
                   "size_bytes": abs_path.stat().st_size}
     except Exception as e:
-        result = {"error": f"Docs export lỗi: {e}"}
+        result = safe_error("Docs export lỗi", e)
     record_action(session_id, "docs", "export", dest_rel, result)
     return result

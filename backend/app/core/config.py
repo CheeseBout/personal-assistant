@@ -138,6 +138,7 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_TOKEN_PATH: str = "../data/google/token.json"     # local token cache, never sent to LLM/log
     GOOGLE_ATTACHMENT_DIR: str = "../data/google/attachments"
+    GOOGLE_MAX_DOWNLOAD_MB: int = 100         # cap for attachments/downloads/exports
     GOOGLE_SCOPES: List[str] = [
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.send",

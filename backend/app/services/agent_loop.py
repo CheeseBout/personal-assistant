@@ -282,10 +282,14 @@ class AgentLoop:
                         "content": f"Action denied: {exec_result.get('reason', 'No reason given')}",
                     })
                 elif exec_result["status"] == "error":
+                    # Error text can contain untrusted content (e.g. a Google API
+                    # exception echoing page/email data) — fence it too.
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
-                        "content": f"Tool error: {exec_result.get('error', 'Unknown error')}",
+                        "content": _wrap_tool_result(
+                            tool_name, f"Tool error: {exec_result.get('error', 'Unknown error')}"
+                        ),
                     })
                 else:
                     result_str = str(exec_result.get("result", {}))
